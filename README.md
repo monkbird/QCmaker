@@ -86,21 +86,56 @@ npm run dev
 
 ```
 QCmaker/
-├── backend/                # Python FastAPI 后端
+├── backend/
 │   ├── app/
-│   │   ├── agents/         # LangChain/LangGraph 智能体
-│   │   ├── api/            # API 路由定义
-│   │   ├── services/       # 核心业务逻辑 (PPT, Chart, RAG)
-│   │   └── core/           # 配置与工具
-│   ├── data/               # 本地数据存储
-│   └── main.py             # 后端入口
-├── frontend/               # React 前端
+│   │   ├── agents/
+│   │   │   ├── discussion.py       # 多智能体研讨编排
+│   │   │   └── topic_consultant.py # 选题顾问智能体
+│   │   ├── api/
+│   │   │   └── endpoints/
+│   │   │       ├── config.py       # 配置接口
+│   │   │       ├── data.py         # 数据处理接口
+│   │   │       ├── discussion.py   # 研讨接口 (WebSocket)
+│   │   │       ├── ppt.py          # PPT 生成接口
+│   │   │       ├── rag.py          # RAG 检索接口
+│   │   │       ├── search.py       # 搜索接口
+│   │   │       ├── topic.py        # 选题接口
+│   │   │       └── visualization.py# 可视化接口
+│   │   ├── core/
+│   │   │   └── config.py           # 核心配置
+│   │   ├── middleware/
+│   │   │   └── pii.py              # PII 敏感信息过滤
+│   │   └── services/
+│   │       ├── chart.py            # 图表生成服务
+│   │       ├── data_cleaning.py    # 数据清洗服务
+│   │       ├── ppt.py              # PPT 生成服务
+│   │       ├── rag.py              # RAG 服务
+│   │       └── search.py           # 搜索服务
+│   ├── data/                       # 本地数据存储
+│   ├── main.py                     # 后端入口
+│   ├── requirements.txt            # Python 依赖
+│   └── README.md                   # 后端文档
+├── frontend/
 │   ├── src/
-│   │   ├── components/     # 业务组件 (ConfigPanel, TopicChat 等)
-│   │   ├── api/            # API 请求封装
-│   │   └── App.jsx         # 主应用入口
-│   └── package.json
-└── README.md               # 项目文档
+│   │   ├── api/
+│   │   │   └── client.js           # Axios 客户端
+│   │   ├── components/
+│   │   │   ├── ConfigPanel.jsx     # 系统配置面板
+│   │   │   ├── DataReview.jsx      # 数据清洗预览
+│   │   │   ├── DiscussionRoom.jsx  # 研讨室
+│   │   │   ├── PPTPreview.jsx      # PPT 预览
+│   │   │   ├── TopicChat.jsx       # 选题顾问聊天
+│   │   │   └── VisualizationPanel.jsx # 可视化面板
+│   │   ├── App.jsx                 # 主应用组件
+│   │   ├── main.tsx                # 前端入口
+│   │   └── index.css               # 全局样式
+│   ├── index.html
+│   ├── package.json                # npm 依赖
+│   ├── postcss.config.js
+│   ├── tailwind.config.js
+│   ├── vite.config.ts
+│   └── README.md                   # 前端文档
+└── README.md                       # 项目主文档
 ```
 
 ## 贡献指南
