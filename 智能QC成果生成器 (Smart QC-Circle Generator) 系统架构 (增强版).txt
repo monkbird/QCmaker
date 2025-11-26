@@ -1,0 +1,186 @@
+﻿智能QC成果生成器 (Smart QC-Circle Generator) 系统架构 (增强版)
+0. 预备阶段：环境配置 (Preparation Phase) —— NEW
+职责：在正式进入 QC 流程前，确保所有外部服务的“连接凭证”已就绪。本系统采用 API 优先 策略，不内置大模型，完全依赖用户提供的 API Key 运行。
+API 凭证管理 (Bring Your Own Key)：
+* 配置界面：系统启动后的首屏为“环境配置面板”。
+* LLM API 设置：
+   * 用户需自行申请并填入 Base URL 和 API Key。
+   * 兼容性：支持标准 OpenAI 接口格式（可接入 GPT-4o, Gemini, Claude, DeepSeek, Kimi 等）。
+   * [新增增强] 本地大模型支持 (Local LLM Support)：
+      * 针对对数据隐私极其敏感的企业用户，新增 Ollama / vLLM 接口支持。
+      * 允许用户将 Base URL 指向本地 http://localhost:11434，使用 Llama 3, Qwen 2.5 等本地模型运行系统，实现数据不出内网。
+   * 多模型策略：允许用户为不同 Agent 指定不同模型（例如：让“组长”用 GPT-4o 控场，让“数据分析师”用 Gemini 1.5 Pro 处理长文档）。
+* [新增增强] 成本与配额卫士 (Cost & Quota Guardian)：
+   * Token 预算设置：用户可为单次 QC 项目设置“最高预算消耗”（如：$5.00）。
+   * 实时监控：系统实时计算 Token 消耗量，当达到 80% 预算时发出预警，避免 API 费用超支。
+搜索与数据源配置 (Search & Data Source Configuration)：
+* 通用搜索 API：
+   * 用于检索国家标准、行业数据、专利文献等公开网页信息。
+   * 推荐服务：Tavily API (针对 AI 优化的搜索)、Serper (Google Search API 封装) 或 Google Custom Search。
+* TrendRadar 社交媒体凭证 (TrendRadar Credentials)：
+   * 参考 TrendRadar 项目机制：为了让第二层的爬虫工具能抓取微博、小红书、知乎等平台的深层数据，需要配置相应的访问凭证。
+   * 配置项：提供 Cookies 录入区 (支持 cookie_str 格式) 或 平台账号配置 (针对 MediaCrawler 组件)。
+   * 隐私说明：所有 Cookies 仅存储在用户本地浏览器或本地运行的后端环境中，不上传至云端。
+连通性自检 (Connectivity Check)：
+* 系统提供“一键测试”按钮，发送一个简单的 "Hello" 请求，验证 Key 是否有效以及网络是否通畅。只有自检通过，才能进入主界面。
+1. 系统总体架构图 (The 5-Layer Architecture)
+本系统严格遵循 T/CAQ 10201-2020 标准，采用 分层解耦 设计，从数据输入到最终报告生成，分为五个核心层级。
+核心层级概览
+1. 初始定义与数据层：接入 AI 选题顾问，通过人机对话明确课题类型，并执行深度智能数据清洗。
+2. 信息获取层：连接外部网络与内部知识库，提供“弹药”，并执行多源情报清洗与融合。[层内闭环]
+3. 多模型研讨层 (核心)：模拟 QC 小组的 Agent 圆桌会议，执行 PDCA 逻辑。[特殊：跨层打通]
+4. 可视化与决策层：将研讨结果转化为图表与结构化决策。支持 “图表-研讨”逆向反馈闭环。[特殊：跨层打通]
+5. 终稿生成层：文档合成、NotebookLM 风格严肃 PPT 引擎 (双模)。[层内闭环]
+2. 层级详细设计
+第一层：初始定义与数据层 (Definition & Data Layer)
+职责：作为系统的“入口”，不仅接收数据，更承担 “选题顾问 (Topic Consultant)” 和 “数据管家 (Data Steward)” 的角色。
+核心功能：
+1. 交互式选题向导 (Interactive Topic Guide)：
+   * 模糊意图捕获：用户输入初步想法（例如：“最近车间里那个机器老是坏，想搞一下”）。
+   * 类型判别对话：AI（调用配置好的 API）分析意图后，主动询问用户以确定课题类型（问题解决型 vs 创新型）。
+   * 智能课题生成 (Topic Generation)：基于确定的类型，AI 生成 3-5 个符合 T/CAQ 标准的规范课题名称。
+      * 标准规范：避免“口号式”标题，遵循“XX（对象）+XX（问题）+XX（结果）”的结构。
+   * 迭代反馈循环 (Feedback Loop)：用户选择或要求重新生成。
+   * [新增增强] 历史课题查重 (Historical Topic Check)：
+      * 利用向量相似度检索，检查新生成的课题是否与企业知识库中已有的 QC 成果高度雷同，避免重复立项。
+2. 深度智能数据清洗管道 (Deep Intelligent Data Cleaning Pipeline)：
+   * 阶段 1：结构标准化：处理合并单元格、去除合计行。
+   * 阶段 2：语义增强：识别 "T" 为温度，"NG" 为不良，统一单位。
+   * 阶段 3：QC 专用逻辑校验：合格数 + 不良数 == 总数，合格率 <= 100%。
+   * 阶段 4：交互式确认：用户手动消解模糊数据。
+3. 🛑 阶段成果审查与编辑关卡 (Review & Edit Gate) —— [层内再更新]
+   * 展示界面：“情报摘要卡片 (Intelligence Brief)”。
+   * 用户动作：用户发现 AI 提取的标准值有误，点击编辑框手动修改。
+   * 系统响应 (Local Update)：
+      * 系统 原地更新 JSON 结构中的 values。
+      * 自动为手动修改的条目打上 source: "user-override" 标签，增加该条情报在后续研讨中的权重。
+技术栈：
+* Frontend: AntD Table (Editable), Chat Interface.
+* Backend: Pandas (核心计算), Pydantic (数据验证模型), LLM Prompting.
+第二层：信息获取层 (Information Retrieval Layer)
+职责：作为系统的“情报局”，利用 TrendRadar 工具链与内部知识库，提供全方位的数据支持。
+核心功能：
+1. 全网多平台趋势雷达 (TrendRadar Integration)：
+   * 工具集成：复用 TrendRadar 核心爬虫组件，覆盖 35+ 平台。
+   * 应用场景：VOC (用户之声) 捕获、技术侦察、竞品监控。
+2. 私有项目知识库 (Private Project Knowledge Base & RAG)：
+   * 多格式文档支持：支持 PDF, Word, Excel, PPT, TXT/Markdown。
+   * 文档向量化处理：清洗、切片、Embedding、ChromaDB 存储。
+   * 混合检索策略：语义检索与关键词检索混合模式。
+   * [新增增强] 敏感隐私数据脱敏中间件 (PII Redaction Middleware)：
+      * 在将私有文档发送给云端 LLM 之前，本地中间件自动识别并替换敏感信息（如手机号、身份证、人名）。
+      * 规则：13812345678 -> [PHONE_NUMBER_1]。
+      * LLM 处理完逻辑后，系统在本地展示层通过映射表将脱敏信息还原（如需要）。
+3. 参数级精准搜索补全 (Parameter-Level Precise Search)：
+   * 核心痛点：解决 QC 图表绘制时缺失标准值、公差值的问题。
+   * 执行机制：
+      * 参数缺口识别：自动扫描缺失的关键元数据（如标准上限）。
+      * 高精度定向检索：调用 Search API 构建组合 Query。
+      * 数值提取与验证：提取数值并进行单位换算。
+      * 图表参数注入：将提取值注入 ECharts 配置。
+4. 多源情报清洗与融合引擎：
+   * 清洗模块 1：NLP 智能降噪：去广告、水军、去重。
+   * 清洗模块 2：结构化要素抽取：将非结构化文本转化为 QC 专用 JSON。
+   * 清洗模块 3：信源分级与冲突消解：
+      * 权重：国标 (10) > 白皮书 (8) > 竞品官网 (6) > 社交媒体 (4) > 匿名评论 (1)。
+      * 冲突处理：默认采信高权重。
+技术栈：
+* Trend Tools: MediaCrawler, Playwright/Selenium, Scrapy.
+* Cleaning: spaCy/NLTK, LLM, [新增] Microsoft Presidio (PII 识别)。
+* Search: Google Search API / Tavily API.
+* RAG: LangChain, ChromaDB.
+第三层：多模型研讨层 (Multi-Model Discussion Layer) —— 核心引擎
+职责：模拟 QC 小组的“头脑风暴”，利用多个专门的 Agent 进行辩论与推理。
+核心机制：
+1. 多轮迭代与深挖 (Multi-Round Iteration & Deep Dive) —— NEW
+   * 自动深度追问：结论太浅（未过 5Why）时，自动触发新一轮讨论。
+   * 数据驱动的回滚：新数据推翻旧假设时，自动回滚至上一阶段。
+   * 用户干预循环：用户可点击“继续讨论”或“换个方向”。
+   * 记忆管理：共享 LangGraph State。
+2. Agent 角色矩阵 (The Virtual Circle)：
+   * 主持人：控场、防死循环。
+   * 研究员：对接 Layer 2，情报参谋。
+   * 数据分析师：统计分析，编写 Python 代码。
+   * 反方/审稿人 (The Critic)：蓝军，专门挑刺。
+   * 撰稿人：整理归纳，输出文本。
+   * [新增增强] 外部专家顾问 (External Expert Agent)：
+      * 当小组陷入僵局时，可激活“专家 Agent”。
+      * 该 Agent 加载特定的“QC 诊断师” Prompt，具备通过 TRIZ 理论或六西格玛方法论提供破局思路的能力。
+3. 编排逻辑 (Orchestration)：
+   * 采用 LangGraph 构建有状态的循环图。
+4. 阶段成果审查与编辑关卡 (Review & Edit Gate) —— [特殊：跨层/跨轮打通]
+   * 展示界面：“研讨纪要”。
+   * 微调模式：直接编辑文字。
+   * 重议模式：点击“驳回”，触发逻辑层面的回滚重算。
+技术栈：
+* Orchestration: LangGraph (Python).
+* LLM Access: openai (Python SDK) or langchain_openai.
+第四层：可视化与决策层 (Visualization & Decision Layer) —— DEEP DIVE
+职责：将抽象的“对话”转化为直观的“图表”和结构化的“决策矩阵”。
+核心功能：
+1. 智能图表生成与推荐 (Smart Chart Recommendation)：
+   * 根据 PDCA 阶段自动推荐图表。
+   * [新增增强] 错误图表拦截 (Bad Chart Interceptor)：
+      * 如果 Agent 试图用饼图展示随时间变化的数据，系统会拦截并提示“建议使用折线图以展示趋势”。保证 QC 专业性。
+2. 可视化反馈闭环 (Visual-to-Discussion Loop) —— NEW
+   * 机制设计：逆向反馈总线 (Reverse Feedback Bus)。
+   * 触发动作：右键点击图表元素选择 "质疑/补充"。
+   * 情境注入：修正模式（改逻辑）、增量模式（补数据）。
+   * 智能路由：样式反馈前端处理，逻辑反馈回滚 Layer 3。
+3. 决策辅助：
+   * 关联图/矩阵图、方案评分表。
+技术栈：
+* Backend: Python 生成 ECharts JSON 配置。
+* Frontend: ECharts-for-React, React Flow.
+第五层：终稿生成层 (Final Draft Generation Layer) —— DEEP DIVE
+职责：作为系统的“出版中心”，生成上会级别的演示文稿。
+核心功能：
+1. 模式 A：自动化复刻引擎 (Automated Replica Engine) —— 默认推荐
+   * 利用 Gemini 1.5 Pro 的长上下文能力，读取全案，直接输出 PPT 结构代码。
+   * 渲染：利用 python-pptx 填入 企业级母版。
+   * 图表注入：自动替换占位符为高清图表。
+2. 模式 B：NotebookLM 投喂包 (Manual Feed Packet) —— 可选
+   * 生成 {项目名}_NotebookLM_Source.pdf，供用户上传至 Google NotebookLM。
+3. 核心 PPT 风格控制 (Style Guardrails)：
+   * ❌ 禁止卡通插画、废话页、纯文字页。
+   * ✅ 强制每页标注数据来源。
+   * [新增增强] 模板版本控制 (Template Versioning)：
+      * 支持用户上传 .pptx 模板文件。系统解析母版中的 Layout，确保生成的 PPT 符合公司最新的 VI (视觉识别) 规范。
+4. 阶段成果审查与编辑关卡 (Review & Edit Gate) —— [层内再更新]
+   * 界面：左侧文档编辑，右侧 PPT 预览。
+   * 系统响应：修改文档章节后，支持 局部刷新 对应的幻灯片，无需全量重生成。
+技术栈：
+* Engine: Gemini 1.5 Pro API.
+* Rendering: python-pptx.
+* Manual Support: WeasyPrint.
+3. 关键交互流程示例 (以"情报融合"为例)
+(保持原文档内容不变)
+4. 技术栈总结 (Tech Stack)
+层级
+	前端 (React Ecosystem)
+	后端 (Python Ecosystem)
+	数据/模型
+	0. 预备
+	Settings Panel, Connection Test
+	API Key Validator, Pydantic, Budget Monitor
+	User API Keys, Ollama (Local)
+	1. 定义与数据
+	Chat Interface, AntD Upload
+	LLM Prompting, FastAPI, Pandas
+	原始文件存储
+	2. 信息获取
+	(无直接界面)
+	TrendRadar Tools, Presidio (PII Redaction), LangChain
+	Google Search API, Vector Store
+	3. 多模型研讨
+	WebSocket Chat UI (流式)
+	LangGraph (核心编排)
+	Gemini / GPT-4o / Local LLM
+	4. 可视化
+	ECharts-for-React, React Flow
+	Matplotlib (静态化), Python ECharts
+	JSON Data
+	5. 终稿生成
+	Tiptap Editor, PPT Preview
+	python-pptx, Python-docx
+	Corporate PPT Templates

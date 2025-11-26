@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+pandas
+pydantic
+langchain
+langgraph
+openai
+python-pptx
+chromadb
+beautifulsoup4
+playwright
+python-multipart
+python-dotenv
+langchain-openai
+langchain-community
+tavily-python
