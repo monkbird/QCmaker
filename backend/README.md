@@ -27,44 +27,49 @@
 ## 技术栈
 
 - **Web 框架**: FastAPI
-- **语言**: Python 3.10+
+- **语言**: Python 3.11
 - **LLM 编排**: LangChain, LangGraph
 - **向量数据库**: ChromaDB
 - **数据分析**: Pandas, NumPy
 - **PPT 生成**: python-pptx
 - **搜索服务**: Tavily API / Google Custom Search
-- **API 客户端**: OpenAI SDK (兼容 DeepSeek, Moonshot, Ollama)
+- **API 客户端**: OpenAI 兼容协议，内置国内外主流服务商与 Ollama
 
 ## 安装与运行
 
 ### 1. 环境准备
-确保已安装 Python 3.10 或更高版本。建议使用虚拟环境。
+固定使用 Python 3.11，并在项目根目录创建虚拟环境。
 
 ```bash
 # 创建虚拟环境
-python -m venv venv
+python -m venv .venv
 
 # 激活虚拟环境 (Windows)
-.\venv\Scripts\activate
+.\.venv\Scripts\Activate.ps1
 
 # 激活虚拟环境 (Linux/macOS)
-source venv/bin/activate
+source .venv/bin/activate
 ```
 
 ### 2. 安装依赖
 ```bash
-pip install -r requirements.txt
+python -m pip install pip-tools
+pip-compile backend/requirements.in -o backend/requirements.lock
+pip install -r backend/requirements.lock
 ```
 
 ### 3. 配置环境变量
 项目支持通过 API 动态配置，也支持 `.env` 文件。
-在 `backend` 目录下创建 `.env` 文件（可选）：
+复制项目根目录 `.env.example` 为 `.env`：
 
 ```env
 OPENAI_API_KEY=your_api_key
+LLM_PROVIDER=openai
 OPENAI_BASE_URL=https://api.openai.com/v1
 TAVILY_API_KEY=your_tavily_key
 ```
+
+`GET /api/config/providers` 只返回服务商接口元数据，不保存具体模型名。`POST /api/config/models` 使用当前密钥实时读取厂商模型列表；缺少密钥或厂商接口失败时返回明确错误，不使用可能过期的内置清单。未知模型按 `UNKNOWN_MODEL_RESERVE_USD` 预留预算并标记为待核对费用，不会绕过预算账本。
 
 ### 4. 启动服务
 在项目根目录下运行：
@@ -77,6 +82,13 @@ uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 服务启动后，API 文档地址：
 - Swagger UI: `http://localhost:8000/docs`
 - ReDoc: `http://localhost:8000/redoc`
+
+### 5. 质量检查
+
+```powershell
+pytest backend/tests -q
+ruff check backend
+```
 
 ## 目录结构
 
@@ -91,7 +103,8 @@ backend/
 │   └── middleware/     # 中间件 (PII 过滤)
 ├── data/               # 本地数据存储 (ChromaDB, Uploads)
 ├── main.py             # 应用入口
-└── requirements.txt    # 依赖列表
+├── requirements.in     # 直接依赖
+└── requirements.lock   # 完整锁定依赖
 ```
 
 ## API 概览

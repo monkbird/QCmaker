@@ -1,12 +1,12 @@
 import re
-from typing import List
+
 
 class PIIRedactionMiddleware:
     def __init__(self):
         # Simple regex patterns for demo
         self.patterns = {
-            "PHONE": r"1[3-9]\d{9}",
             "ID_CARD": r"\d{17}[\dXx]",
+            "PHONE": r"1[3-9]\d{9}",
             "EMAIL": r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+"
         }
 

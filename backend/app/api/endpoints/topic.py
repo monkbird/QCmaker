@@ -1,20 +1,11 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from backend.app.agents.topic_consultant import topic_consultant
+from fastapi import APIRouter
+
+from backend.app.core.llm_gateway import chat
+from backend.app.models.contracts import TopicChatRequest, TopicChatResponse
 
 router = APIRouter()
 
-class ChatRequest(BaseModel):
-    message: str
-    history: str = ""
-
-class ChatResponse(BaseModel):
-    response: str
-
-@router.post("/chat", response_model=ChatResponse)
-async def chat_with_consultant(request: ChatRequest):
-    try:
-        response = await topic_consultant.chat(request.message, request.history)
-        return {"response": response}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@router.post("/chat", response_model=TopicChatResponse)
+async def chat_with_consultant(request: TopicChatRequest):
+    messages = [{"role": "system", "content": "你是QC课题顾问。请基于问题具体、简洁地引导用户形成可量化的QC课题。"}, *[item.model_dump() for item in request.history], {"role": "user", "content": request.message}]
+    return TopicChatResponse(response=await chat(messages))

@@ -5,3 +5,7 @@ __pycache__/
 venv/
 dist/
 .DS_Store
+backend/data/*.sqlite3*
+backend/data/chroma_db/
+backend/generated_ppts/*.pptx
+backend/logs/*.log

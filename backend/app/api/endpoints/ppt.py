@@ -1,36 +1,14 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import List, Optional
-from backend.app.services.ppt import ppt_service
-import os
+from fastapi import APIRouter
 from fastapi.responses import FileResponse
+
+from backend.app.models.contracts import PPTRequest, PPTResult
+from backend.app.services.ppt import generate, resolve_download
 
 router = APIRouter()
 
-class PPTRequest(BaseModel):
-    project_name: str
-    topic: str
-    data_summary: str
-    discussion_summary: str
-    chart_images: Optional[List[str]] = []
+@router.post("/generate", response_model=PPTResult)
+def generate_ppt(request: PPTRequest): return generate(request)
 
-@router.post("/generate")
-async def generate_ppt(request: PPTRequest):
-    try:
-        path = ppt_service.generate_ppt(
-            request.project_name,
-            request.topic,
-            request.data_summary,
-            request.discussion_summary,
-            request.chart_images
-        )
-        return {"status": "success", "path": path, "filename": os.path.basename(path)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/download/{filename}")
-async def download_ppt(filename: str):
-    file_path = os.path.join("backend/generated_ppts", filename)
-    if os.path.exists(file_path):
-        return FileResponse(file_path, filename=filename)
-    raise HTTPException(status_code=404, detail="File not found")
+@router.get("/download/{file_id}")
+def download_ppt(file_id: str):
+    path, display_name = resolve_download(file_id); return FileResponse(path, filename=display_name, media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation")

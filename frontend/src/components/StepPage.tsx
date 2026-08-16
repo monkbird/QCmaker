@@ -1,0 +1,3 @@
+import type { ReactNode } from 'react'
+export function StepPage({eyebrow,title,description,wide=false,aside,children,actions}:{eyebrow:string;title:string;description:string;wide?:boolean;aside?:ReactNode;children:ReactNode;actions?:ReactNode}){return <main className={`step-page ${wide?'step-page--wide':''}`}><header className="page-heading"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{description}</p></div>{aside&&<div className="heading-aside">{aside}</div>}</header><section className="page-body">{children}</section>{actions&&<footer className="action-dock">{actions}</footer>}</main>}
+

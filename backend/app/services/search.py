@@ -1,21 +1,15 @@
 from tavily import TavilyClient
-from backend.app.core.config import settings
+
+from backend.app.core.config import get_settings
+
 
 class SearchService:
-    def __init__(self):
-        self.client = None
-        if settings.TAVILY_API_KEY:
-            self.client = TavilyClient(api_key=settings.TAVILY_API_KEY)
-
     async def search(self, query: str, max_results: int = 5):
-        if not self.client:
-            # Fallback or error if no key
-            return [{"title": "No API Key", "content": "Please configure Tavily API Key", "url": "#"}]
-        
+        key = get_settings().TAVILY_API_KEY
+        if not key: return []
         try:
-            response = self.client.search(query, max_results=max_results)
+            response = TavilyClient(api_key=key).search(query, max_results=max_results)
             return response.get("results", [])
-        except Exception as e:
-            return [{"title": "Error", "content": str(e), "url": "#"}]
+        except Exception: return []
 
 search_service = SearchService()

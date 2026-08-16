@@ -1,105 +1,49 @@
-# QCmaker Frontend (智能 QC 成果生成器前端)
+# QCmaker 前端
 
-## 项目简介
+基于 React、TypeScript、Vite、Ant Design 与 ECharts 的六步式 QC 成果工作台。接口字段、路由门禁和持久化行为与 `docs/frontend-dev-plan.md`、`docs/backend-dev-plan.md` 保持一致。
 
-这是 **智能 QC 成果生成器 (QCmaker)** 的前端项目，基于 **React 18** 和 **Vite** 构建。它提供了一个现代化的、响应式的用户界面，用于引导用户完成 QC 活动的各个阶段，包括系统配置、选题咨询、数据清洗、多模型研讨、可视化决策和 PPT 预览。
-
-前端采用 **Ant Design** 组件库和 **Tailwind CSS** 进行样式开发，并集成 **ECharts** 进行数据可视化。
-
-## 核心功能模块
-
-### 1. 系统配置 (ConfigPanel)
-- 配置 API Key (OpenAI/DeepSeek/Moonshot) 或本地 Ollama 地址。
-- 检查后端连通性。
-
-### 2. 选题顾问 (TopicChat)
-- 与 AI 顾问进行自然语言对话，确定 QC 课题。
-- 确认选题后自动流转到下一阶段。
-
-### 3. 数据清洗 (DataReview)
-- 上传 CSV/Excel 数据文件。
-- 预览并手动编辑清洗后的数据。
-
-### 4. 研讨室 (DiscussionRoom)
-- 实时展示多智能体研讨过程 (WebSocket)。
-- 用户可随时介入对话。
-
-### 5. 可视化 (VisualizationPanel)
-- 根据数据生成 ECharts 图表。
-- 支持切换图表类型 (柱状图/折线图/饼图)。
-
-### 6. PPT 预览 (PPTPreview)
-- 请求后端生成 PPT。
-- 提供下载链接。
-
-## 技术栈
-
-- **构建工具**: Vite
-- **框架**: React 18
-- **UI 库**: Ant Design (AntD)
-- **样式**: Tailwind CSS
-- **图表**: ECharts, echarts-for-react
-- **HTTP 请求**: Axios
-- **图标**: @ant-design/icons
-
-## 开发指南
-
-### 1. 安装依赖
+## 本地运行
 
 ```bash
 npm install
-```
-
-### 2. 启动开发服务器
-
-```bash
 npm run dev
 ```
 
-访问 `http://localhost:5173`。
+开发代理由 `.env.development` 中的 `VITE_DEV_API_TARGET` 配置。生产环境通过 `VITE_API_BASE_URL` 和可选的 `VITE_WS_BASE_URL` 指定服务地址，业务源码不写死主机名。
 
-### 3. 构建生产版本
-
-```bash
-npm run build
-```
-
-构建产物将输出到 `dist` 目录。
-
-### 4. 代码规范
-
-项目配置了 ESLint 进行代码检查。
+## 质量检查
 
 ```bash
 npm run lint
+npm run test
+npm run build
+npm run test:e2e
 ```
 
-## 目录结构
+## 主要目录
 
-```
-frontend/
-├── src/
-│   ├── api/            # Axios 客户端封装
-│   ├── components/     # React 组件
-│   │   ├── ConfigPanel.jsx
-│   │   ├── TopicChat.jsx
-│   │   ├── DataReview.jsx
-│   │   ├── DiscussionRoom.jsx
-│   │   ├── VisualizationPanel.jsx
-│   │   └── PPTPreview.jsx
-│   ├── App.jsx         # 主应用组件
-│   ├── main.tsx        # 入口文件
-│   └── index.css       # 全局样式 (Tailwind)
-├── public/             # 静态资源
-├── package.json        # 依赖配置
-├── vite.config.ts      # Vite 配置
-└── README.md           # 前端文档
+```text
+src/
+├── api/          # HTTP 客户端、错误归一化与各领域接口
+├── components/   # 通用步骤、头像、图标按钮和错误边界
+├── context/      # 向导状态、reducer、恢复与持久化
+├── hooks/        # 路由门禁、WebSocket 续传与重连
+├── layouts/      # 六步工作台布局
+├── pages/        # 配置、选题、数据、研讨、图表、PPT 页面
+├── storage/      # IndexedDB schema 与读写封装
+├── test/         # Vitest 单元测试
+└── types/        # 与后端 wire format 对齐的类型
 ```
 
-## 贡献指南
+浏览器会保存项目状态、原始数据文件、研讨事件和图表图片。刷新时先校验后端数据集；数据集过期且本地仍有原文件时会尝试重新上传。清空项目会同时清理四个 IndexedDB store。
 
-请确保代码风格一致，并在提交前运行 Lint 检查。
+## 交互规范
 
-## 许可证
+- 短文字操作保持紧凑，默认按钮高 32px，主操作高 36px。
+- 仅图标操作必须包含 Tooltip 和 `aria-label`，点击区不小于 32×32px。
+- 数据修改必须先预览影响范围，再应用；下游成果按数据 revision 自动失效。
+- PPT 下载只使用后端返回的不可猜测 `file_id`。
 
-MIT License
+## 模型服务
+
+配置页按国内、国际、本地和自定义四组展示模型服务商。填写 API Key 后点击模型名称输入框，会通过 `/api/config/models` 直接获取该账户在厂商接口中真实可用的模型；前后端均不保存静态模型名单。缺少密钥或厂商接口失败时明确提示，同时保留手工输入模型 ID 的能力。切换云端服务商必须同时填写新服务商的 API Key，避免误用上一家服务商的密钥。

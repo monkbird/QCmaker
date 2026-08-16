@@ -1,0 +1,6 @@
+[
+  {"provider":"openai","model":"gpt-4o-mini","input_per_1m":"0.15","output_per_1m":"0.60","cached_input_per_1m":"0.075","embedding_per_1m":"0","safety_margin_usd":"0.0001","currency":"USD","effective_from":"2024-07-18"},
+  {"provider":"openai","model":"text-embedding-3-small","input_per_1m":"0","output_per_1m":"0","cached_input_per_1m":"0","embedding_per_1m":"0.02","safety_margin_usd":"0.0001","currency":"USD","effective_from":"2024-01-25"},
+  {"provider":"deepseek","model":"deepseek-v4-flash","input_per_1m":"0.14","output_per_1m":"0.28","cached_input_per_1m":"0.0028","embedding_per_1m":"0","safety_margin_usd":"0.0001","currency":"USD","effective_from":"2026-04-24"},
+  {"provider":"deepseek","model":"deepseek-v4-pro","input_per_1m":"0.435","output_per_1m":"0.87","cached_input_per_1m":"0.003625","embedding_per_1m":"0","safety_margin_usd":"0.0001","currency":"USD","effective_from":"2026-04-24"}
+]

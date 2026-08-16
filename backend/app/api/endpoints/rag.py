@@ -1,33 +1,36 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from backend.app.services.rag import rag_service
-import shutil
 import os
 import tempfile
+from uuid import uuid4
+
+from fastapi import APIRouter, File, UploadFile
+from pydantic import BaseModel, Field
+
+from backend.app.core.errors import AppException
+from backend.app.services.rag import rag_service
 
 router = APIRouter()
 
 @router.post("/ingest")
 async def ingest_document(file: UploadFile = File(...)):
+    filename = file.filename or "document.txt"; suffix = os.path.splitext(filename)[1].lower()
+    if suffix not in {".txt", ".pdf"}: raise AppException("DATA_FORMAT_UNSUPPORTED", "仅支持 TXT/PDF", 400)
+    content = await file.read(10 * 1024 * 1024 + 1)
+    if len(content) > 10 * 1024 * 1024: raise AppException("DATA_FILE_TOO_LARGE", "文件不能超过 10MB", 400)
+    tmp_path = None
     try:
-        # Save to temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as tmp:
-            shutil.copyfileobj(file.file, tmp)
-            tmp_path = tmp.name
-            
-        # Ingest
-        num_chunks = await rag_service.ingest_document(tmp_path, file.filename)
-        
-        # Cleanup
-        os.unlink(tmp_path)
-        
-        return {"status": "success", "chunks_ingested": num_chunks, "filename": file.filename}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp: tmp.write(content); tmp_path = tmp.name
+        num_chunks = await rag_service.ingest_document(tmp_path, filename)
+        return {"document_id": f"doc_{uuid4().hex}", "filename": filename, "chunks": num_chunks}
+    finally:
+        if tmp_path:
+            try: os.unlink(tmp_path)
+            except FileNotFoundError: pass
+
+class RAGSearchRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    k: int = Field(default=4, ge=1, le=20)
 
 @router.post("/search")
-async def search_documents(query: str):
-    try:
-        results = await rag_service.search(query)
-        return {"results": [{"content": doc.page_content, "metadata": doc.metadata} for doc in results]}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+async def search_documents(request: RAGSearchRequest):
+    results = await rag_service.search(request.query, request.k)
+    return {"results": [{"content": doc.page_content, "metadata": doc.metadata, "score": None} for doc in results]}

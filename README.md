@@ -55,18 +55,17 @@
 
 ### 前置要求
 - Node.js (v18+)
-- Python (v3.10+)
+- Python 3.11
 
 ### 1. 后端启动
-进入 `backend` 目录并安装依赖：
-```bash
-cd backend
-pip install -r requirements.txt
+在项目根目录创建虚拟环境并按锁文件安装：
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r backend/requirements.lock
 ```
 启动后端服务（在项目根目录下运行）：
 ```bash
-# 回退到项目根目录
-cd ..
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -113,7 +112,8 @@ QCmaker/
 │   │       └── search.py           # 搜索服务
 │   ├── data/                       # 本地数据存储
 │   ├── main.py                     # 后端入口
-│   ├── requirements.txt            # Python 依赖
+│   ├── requirements.in             # Python 直接依赖
+│   ├── requirements.lock           # 完整锁定依赖
 │   └── README.md                   # 后端文档
 ├── frontend/
 │   ├── src/

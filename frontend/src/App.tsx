@@ -1,35 +1,6 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
-
-function App() {
-  const [count, setCount] = useState(0)
-
-  return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
-}
-
-export default App
+import { ConfigProvider, App as AntApp } from 'antd'
+import { RouterProvider } from 'react-router'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import { WizardProvider } from './context/WizardContext'
+import { router } from './routes/router'
+export default function App(){return <ConfigProvider theme={{token:{colorPrimary:'#087f72',colorInfo:'#087f72',borderRadius:8,fontFamily:'"Noto Sans SC","Microsoft YaHei",sans-serif',controlHeight:32},components:{Button:{primaryShadow:'none',fontWeight:600},Card:{headerBg:'#f7faf9'}}}}><AntApp><ErrorBoundary><WizardProvider><RouterProvider router={router}/></WizardProvider></ErrorBoundary></AntApp></ConfigProvider>}

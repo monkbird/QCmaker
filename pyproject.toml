@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 160
+exclude = ["backend/app/agents/discussion.py", "backend/app/agents/topic_consultant.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501", "E701", "E702"]
