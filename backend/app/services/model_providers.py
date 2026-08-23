@@ -1,6 +1,6 @@
 from dataclasses import asdict, dataclass
 
-VERIFIED_AT = "2026-08-16"
+VERIFIED_AT = "2026-08-22"
 
 
 @dataclass(frozen=True)
@@ -13,6 +13,7 @@ class Provider:
     key_url: str | None = None
     docs_url: str | None = None
     verified_at: str = VERIFIED_AT
+    kind: str = "api"  # api=按量计费 | plan=订阅制 Coding Plan | gateway=第三方聚合网关
 
 
 PROVIDERS = (
@@ -38,8 +39,12 @@ PROVIDERS = (
     Provider("stepfun", "阶跃星辰 StepFun", "cn", "https://api.stepfun.com/v1", key_url="https://platform.stepfun.com/", docs_url="https://platform.stepfun.com/docs/llm/modeloverview"),
     Provider("yi", "零一万物 Yi", "cn", "https://api.lingyiwanwu.com/v1", key_url="https://platform.lingyiwanwu.com/apikeys", docs_url="https://platform.lingyiwanwu.com/docs"),
     Provider("baichuan", "百川智能", "cn", "https://api.baichuan-ai.com/v1", key_url="https://platform.baichuan-ai.com/console/apikey", docs_url="https://platform.baichuan-ai.com/docs/api"),
+    Provider("opencode", "OpenCode Zen 网关", "gateway", "https://opencode.ai/zen/v1", key_url="https://opencode.ai/auth", docs_url="https://opencode.ai/docs/zen", kind="gateway"),
+    Provider("opencode_go", "OpenCode Go 订阅网关", "plan", "https://opencode.ai/zen/go/v1", key_url="https://opencode.ai/auth", docs_url="https://opencode.ai/docs/zen", kind="plan"),
+    Provider("glm_coding", "智谱 GLM Coding Plan（国内）", "plan", "https://open.bigmodel.cn/api/coding/paas/v4", key_url="https://open.bigmodel.cn/usercenter/apikeys", docs_url="https://docs.bigmodel.cn/cn/coding-plan/overview", kind="plan"),
+    Provider("zai_coding", "Z.ai GLM Coding Plan（海外）", "plan", "https://api.z.ai/api/coding/paas/v4", key_url="https://z.ai/manage-apikey/apikey-list", docs_url="https://docs.z.ai/devpack/quick-start", kind="plan"),
     Provider("ollama", "Ollama 本地模型", "local", "http://localhost:11434/v1", "ollama", docs_url="https://docs.ollama.com/api/tags"),
-    Provider("custom", "自定义 OpenAI 兼容服务", "custom", "", docs_url="https://platform.openai.com/docs/api-reference/models/list"),
+    Provider("custom", "自定义 OpenAI 兼容服务 / 中转", "custom", "", docs_url="https://platform.openai.com/docs/api-reference/models/list", kind="gateway"),
 )
 
 _BY_ID = {provider.id: provider for provider in PROVIDERS}

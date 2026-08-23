@@ -1,10 +1,11 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 
+from backend.app.core.security import verify_access_token
 from backend.app.models.contracts import PPTRequest, PPTResult
 from backend.app.services.ppt import generate, resolve_download
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_access_token)])
 
 @router.post("/generate", response_model=PPTResult)
 def generate_ppt(request: PPTRequest): return generate(request)

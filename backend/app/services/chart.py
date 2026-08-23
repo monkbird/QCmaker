@@ -1,3 +1,4 @@
+import math
 from collections import OrderedDict
 
 from backend.app.core.errors import AppException
@@ -8,10 +9,13 @@ def generate(request: ChartRequest, rows: list[DataRow]) -> ChartResponse:
     invalid: list[str] = []; converted: list[str] = []; points: list[tuple[str, float]] = []
     for row in rows:
         raw = row.values.get(request.y_axis)
-        try: value = float(str(raw).replace(",", ""))
+        try:
+            value = float(str(raw).replace(",", ""))
+            if not math.isfinite(value): raise ValueError("non-finite number")
         except (TypeError, ValueError): invalid.append(row.row_id); continue
-        if not isinstance(raw, (int, float)): converted.append(row.row_id)
-        points.append((str(row.values.get(request.x_axis, "")), value))
+        if not isinstance(raw, bool) and not isinstance(raw, (int, float)): converted.append(row.row_id)
+        category = row.values.get(request.x_axis)
+        points.append(("" if category is None else str(category), value))
     if invalid: raise AppException("DATA_Y_NOT_NUMERIC", "Y 轴包含无法转换的值", 422, {"row_ids": invalid, "suggestion": "请先应用 convert_number 清洗规则"})
     aggregation = request.aggregation or ("sum" if request.chart_type in {"bar", "pie"} else "none")
     if aggregation == "none": x_data = [x for x, _ in points]; y_data = [y for _, y in points]; grouped = 0

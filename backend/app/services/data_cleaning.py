@@ -43,6 +43,10 @@ def rows_from_frame(frame: pd.DataFrame) -> list[DataRow]:
     return [DataRow(row_id=f"row_{position + 1}", values={str(k): normalize_scalar(v) for k, v in row.items()}) for position, (_, row) in enumerate(frame.iterrows())]
 
 
+def _is_blank(value: Any) -> bool:
+    return value is None or value == ""
+
+
 def analyze(rows: list[DataRow], mode: str = "detected", applied_rules: list[CleaningRule] | None = None) -> tuple[list[ColumnInfo], CleaningReport]:
     names = list(rows[0].values) if rows else []; issues: list[CleaningIssue] = []; columns: list[ColumnInfo] = []
     empty_rows = [row.row_id for row in rows if all(value is None or value == "" for value in row.values.values())]
@@ -51,7 +55,7 @@ def analyze(rows: list[DataRow], mode: str = "detected", applied_rules: list[Cle
     if total_rows: issues.append(CleaningIssue(issue_type="total_row", row_ids=total_rows, suggested_actions=["drop_rows", "keep"]))
     outlier_total = 0
     for name in names:
-        values = [row.values.get(name) for row in rows]; missing = [row.row_id for row in rows if row.values.get(name) is None]
+        values = [row.values.get(name) for row in rows]; missing = [row.row_id for row in rows if _is_blank(row.values.get(name))]
         if missing: issues.append(CleaningIssue(issue_type="missing", column=name, row_ids=missing, suggested_actions=["median", "forward_fill", "keep"]))
         nonempty = [value for value in values if value not in (None, "")]
         percent = bool(nonempty) and sum(isinstance(value, str) and value.strip().endswith("%") for value in nonempty) >= len(nonempty) / 2
@@ -78,21 +82,25 @@ def apply_rules(source: list[DataRow], rules: list[CleaningRule], mode: str = "a
         selected_ids = targets or {row.row_id for row in rows}
         if rule.action == "median":
             numbers = pd.to_numeric(pd.Series([row.values.get(rule.column) for row in rows]), errors="coerce"); median = float(numbers.median()) if numbers.notna().any() else None
+            if median is not None and not math.isfinite(median): median = None
             for row in rows:
-                if row.row_id in selected_ids and row.values.get(rule.column) is None and median is not None: row.values[rule.column] = median; filled += 1
+                if row.row_id in selected_ids and _is_blank(row.values.get(rule.column)) and median is not None: row.values[rule.column] = median; filled += 1
         elif rule.action == "forward_fill":
             previous = None
             for row in rows:
-                if row.values.get(rule.column) is not None: previous = row.values[rule.column]
+                if not _is_blank(row.values.get(rule.column)): previous = row.values[rule.column]
                 elif row.row_id in selected_ids and previous is not None: row.values[rule.column] = previous; filled += 1
         else:
             for row in rows:
                 if row.row_id not in selected_ids: continue
                 value = row.values.get(rule.column)
-                if value in (None, ""): continue
+                if value is None or value == "": continue
                 raw = str(value).strip().replace(",", ""); factor = 0.01 if rule.action == "convert_percent" else 1.0
                 if rule.action == "convert_percent": raw = raw.removesuffix("%")
-                try: row.values[rule.column] = float(raw) * factor; converted += 1
+                try:
+                    number = float(raw) * factor
+                    if not math.isfinite(number): raise ValueError("non-finite number")
+                    row.values[rule.column] = number; converted += 1
                 except ValueError: continue
     columns, report = analyze(rows, mode=mode, applied_rules=rules); report.removed_rows = removed; report.filled_cells = filled; report.type_conversions = converted
     return rows, columns, report

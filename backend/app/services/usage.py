@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -30,7 +30,9 @@ def estimate_tokens(text: str, model: str) -> int:
         except KeyError: encoding = tiktoken.get_encoding("cl100k_base")
         return len(encoding.encode(text))
     except Exception:
-        return max(1, math.ceil(len(text) / 2))
+        cjk = sum(1 for char in text if ord(char) > 0x2E80)
+        other = len(text) - cjk
+        return max(1, math.ceil(cjk * 1.0 + other / 4))
 
 
 def reserve(request_id: str, provider: str, model: str, input_text: str) -> str | None:
@@ -70,6 +72,81 @@ def settle(reservation_id: str | None, request_id: str, provider: str, model: st
 def release(reservation_id: str | None) -> None:
     if reservation_id:
         with transaction(immediate=True) as db: db.execute("UPDATE reservations SET status='released' WHERE id=? AND status='reserved'", (reservation_id,))
+
+
+def reserve_embedding(request_id: str, provider: str, model: str, input_texts: list[str]) -> str | None:
+    if provider == "local": return None
+    settings = get_settings(); tokens = sum(estimate_tokens(text, model) for text in input_texts)
+    if tokens <= 0: tokens = 1
+    try: price = price_for(provider, model)
+    except AppException as exc:
+        if exc.code != "MODEL_PRICE_UNKNOWN": raise
+        price = None
+    unit = Decimal(str(price["embedding_per_1m"])) if price is not None and Decimal(str(price["embedding_per_1m"])) > 0 else (Decimal(str(price["input_per_1m"])) if price is not None else Decimal("0"))
+    margin = Decimal(str(price["safety_margin_usd"])) if price is not None else Decimal(str(getattr(settings, "UNKNOWN_MODEL_RESERVE_USD", 0.25)))
+    amount = Decimal(tokens) * unit / Decimal(1_000_000) + margin
+    reservation_id = f"res_{uuid4().hex}"
+    with transaction(immediate=True) as db:
+        used = Decimal(str(db.execute("SELECT COALESCE(SUM(CAST(cost_usd AS REAL)),0) FROM usage_events").fetchone()[0])); held = Decimal(str(db.execute("SELECT COALESCE(SUM(CAST(reserved_usd AS REAL)),0) FROM reservations WHERE status IN ('reserved','usage_unknown')").fetchone()[0]))
+        if db.execute("SELECT 1 FROM reservations WHERE status='provider_overrun' LIMIT 1").fetchone(): raise AppException("BUDGET_EXCEEDED", "账目存在供应商超额，外部调用已暂停", 429)
+        if used + held + amount > Decimal(str(settings.MAX_BUDGET_USD)): raise AppException("BUDGET_EXCEEDED", "模型预算不足", 429, {"required_usd": str(amount)})
+        db.execute("INSERT INTO reservations VALUES(?,?,?,?,?,?,?)", (reservation_id, request_id, provider, model, str(amount), "reserved", datetime.now(UTC).isoformat()))
+    return reservation_id
+
+
+def settle_embedding(reservation_id: str | None, request_id: str, provider: str, model: str, estimated_tokens: int) -> None:
+    if not reservation_id or provider == "local": return
+    try: price = price_for(provider, model)
+    except AppException as exc:
+        if exc.code != "MODEL_PRICE_UNKNOWN":
+            raise
+        with transaction(immediate=True) as db: db.execute("UPDATE reservations SET status='usage_unknown' WHERE id=?", (reservation_id,))
+        return
+    unit = Decimal(str(price["embedding_per_1m"])) if Decimal(str(price["embedding_per_1m"])) > 0 else Decimal(str(price["input_per_1m"]))
+    cost = Decimal(estimated_tokens) * unit / Decimal(1_000_000)
+    with transaction(immediate=True) as db:
+        db.execute("UPDATE reservations SET status='settled' WHERE id=?", (reservation_id,))
+        db.execute("INSERT INTO usage_events VALUES(?,?,?,?,?,?,?,?,?,?)", (f"use_{uuid4().hex}", request_id, provider, model, 0, 0, estimated_tokens, str(cost), price["effective_from"], datetime.now(UTC).isoformat()))
+
+
+RESERVED_GRACE_MINUTES = 30
+
+
+def sweep_stale_reservations() -> int:
+    """Release budget holds leaked by crashed requests; expire ancient unknown-usage holds."""
+    now = datetime.now(UTC)
+    reserved_cutoff = (now - timedelta(minutes=RESERVED_GRACE_MINUTES)).isoformat()
+    unknown_cutoff = (now - timedelta(hours=get_settings().DATASET_TTL_HOURS)).isoformat()
+    changed = 0
+    with transaction(immediate=True) as db:
+        cursor = db.execute("UPDATE reservations SET status='released' WHERE status='reserved' AND created_at<=?", (reserved_cutoff,))
+        changed += cursor.rowcount
+        cursor = db.execute("UPDATE reservations SET status='expired' WHERE status='usage_unknown' AND created_at<=?", (unknown_cutoff,))
+        changed += cursor.rowcount
+    return changed
+
+
+def reset_provider_overrun() -> int:
+    """Admin escape hatch after a provider_overrun bricks all LLM calls."""
+    with transaction(immediate=True) as db:
+        cursor = db.execute("UPDATE reservations SET status='overrun_cleared' WHERE status='provider_overrun'")
+        return cursor.rowcount
+
+
+def purge_expired_entities() -> dict[str, int]:
+    """Delete expired dataset rows, discussion sessions and their events/commands."""
+    now_iso = datetime.now(UTC).isoformat()
+    purged = {"datasets": 0, "sessions": 0}
+    with transaction(immediate=True) as db:
+        rows = db.execute("SELECT dataset_id FROM datasets WHERE expires_at<=?", (now_iso,)).fetchall()
+        for row in rows:
+            db.execute("DELETE FROM datasets WHERE dataset_id=?", (row[0],)); purged["datasets"] += 1
+        rows = db.execute("SELECT session_id FROM discussion_sessions WHERE expires_at<=?", (now_iso,)).fetchall()
+        for row in rows:
+            db.execute("DELETE FROM discussion_events WHERE session_id=?", (row[0],))
+            db.execute("DELETE FROM discussion_commands WHERE session_id=?", (row[0],))
+            db.execute("DELETE FROM discussion_sessions WHERE session_id=?", (row[0],)); purged["sessions"] += 1
+    return purged
 
 
 def get_usage() -> UsageView:

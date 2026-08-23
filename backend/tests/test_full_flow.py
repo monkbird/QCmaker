@@ -1,11 +1,11 @@
-from io import BytesIO
+﻿from io import BytesIO
 
 
 def test_offline_full_flow(client, monkeypatch):
     from backend.app.api.endpoints import topic as topic_endpoint
     from backend.app.services import discussion_session
 
-    async def fake_chat(messages):
+    async def fake_chat(messages, role=None):
         if "只输出合法JSON" in messages[0]["content"]:
             return '{"problem":"波动偏大","root_causes":["点检不足"],"countermeasures":["完善点检"],"summary":"闭环改进"}'
         return "降低设备故障率"

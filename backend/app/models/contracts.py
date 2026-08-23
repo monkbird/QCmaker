@@ -27,6 +27,13 @@ class ConfigView(BaseModel):
     has_tavily_key: bool
     status: Literal["ready", "missing", "degraded"]
     config_revision: int
+    role_models: dict[str, str] = Field(default_factory=dict)
+    credential_providers: list[str] = Field(default_factory=list)
+
+
+class ProviderCredentialInput(BaseModel):
+    api_key: str | None = None
+    base_url: str | None = None
 
 
 class ConfigUpdate(BaseModel):
@@ -39,6 +46,8 @@ class ConfigUpdate(BaseModel):
     local_llm_model: str | None = None
     tavily_api_key: str | None = None
     max_budget_usd: float | None = Field(default=None, ge=0)
+    role_models: dict[str, str] | None = None
+    provider_credentials: dict[str, ProviderCredentialInput] | None = None
 
 
 class ConnectivityCheck(BaseModel):
@@ -71,6 +80,31 @@ class TopicChatRequest(BaseModel):
 
 class TopicChatResponse(BaseModel):
     response: str
+    references_used: int = 0
+
+
+class TopicEvaluation(BaseModel):
+    specific: int = Field(ge=1, le=5)
+    measurable: int = Field(ge=1, le=5)
+    achievable: int = Field(ge=1, le=5)
+    relevant: int = Field(ge=1, le=5)
+    time_bound: int = Field(ge=1, le=5)
+    total: int
+    verdict: str
+    suggestions: list[str] = Field(default_factory=list, max_length=8)
+    references_used: int = 0
+
+
+class CleaningAdviceItem(BaseModel):
+    index: int
+    action: Literal["keep", "drop_rows", "median", "forward_fill", "convert_number", "convert_percent"]
+    reason: str
+
+
+class CleaningAdviceResponse(BaseModel):
+    overall: str
+    items: list[CleaningAdviceItem] = Field(default_factory=list, max_length=50)
+    model: str
 
 
 JsonScalar = str | int | float | bool | None
@@ -187,6 +221,20 @@ class ChartRecommendation(BaseModel):
     reason: str
 
 
+class ChartInsightRequest(BaseModel):
+    dataset_id: str
+    revision: int
+    focus: str = Field(default="", max_length=500)
+
+
+class ChartInsightResponse(BaseModel):
+    recommendation: ChartRecommendation
+    insight: str
+    caveats: list[str] = Field(default_factory=list, max_length=6)
+    model: str
+    source: Literal["ai", "rules"]
+
+
 class DiscussionSummary(BaseModel):
     problem: str
     root_causes: list[str]
@@ -224,3 +272,7 @@ class UsageView(BaseModel):
     remaining_usd: Decimal
     unknown_cost: bool
     usage_by_model: list[ModelUsage]
+
+
+class BudgetResetResult(BaseModel):
+    cleared_reservations: int

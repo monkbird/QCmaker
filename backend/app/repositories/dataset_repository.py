@@ -30,37 +30,40 @@ def create(filename: str, rows: list[DataRow], columns: list[ColumnInfo], report
     return _from_row(row)
 
 
+def _load_row(dataset_id: str, db) -> object:
+    row = db.execute("SELECT * FROM datasets WHERE dataset_id=?", (dataset_id,)).fetchone()
+    if not row or datetime.fromisoformat(row["expires_at"]) <= datetime.now(UTC): raise AppException("SESSION_NOT_FOUND", "数据集不存在或已过期", 404)
+    return row
+
+
 def get(dataset_id: str) -> DatasetResponse:
     db = connect()
-    try: row = db.execute("SELECT * FROM datasets WHERE dataset_id=?", (dataset_id,)).fetchone()
+    try: row = _load_row(dataset_id, db)
     finally: db.close()
-    if not row or datetime.fromisoformat(row["expires_at"]) <= datetime.now(UTC): raise AppException("SESSION_NOT_FOUND", "数据集不存在或已过期", 404)
     return _from_row(row)
 
 
 def raw_rows(dataset_id: str) -> list[DataRow]:
     db = connect()
-    try: row = db.execute("SELECT raw_rows_json FROM datasets WHERE dataset_id=?", (dataset_id,)).fetchone()
+    try: row = _load_row(dataset_id, db)
     finally: db.close()
-    if not row: raise AppException("SESSION_NOT_FOUND", "数据集不存在或已过期", 404)
-    return [DataRow.model_validate(x) for x in json.loads(row[0])]
+    return [DataRow.model_validate(x) for x in json.loads(row["raw_rows_json"])]
 
 
 def update(dataset_id: str, base_revision: int, rows: list[DataRow], columns: list[ColumnInfo], report: CleaningReport, restored: bool = False) -> DatasetResponse:
     with transaction(immediate=True) as db:
-        row = db.execute("SELECT revision FROM datasets WHERE dataset_id=?", (dataset_id,)).fetchone()
-        if not row: raise AppException("SESSION_NOT_FOUND", "数据集不存在或已过期", 404)
+        row = _load_row(dataset_id, db)
         if row["revision"] != base_revision: raise AppException("DATA_REVISION_CONFLICT", "数据版本已变化，请刷新后重试", 409, {"current_revision": row["revision"]})
         revision = base_revision + 1
-        db.execute("UPDATE datasets SET revision=?,confirmed_revision=NULL,current_rows_json=?,columns_json=?,report_json=? WHERE dataset_id=? AND revision=?", (revision, _dump(rows), _dump(columns), _dump(report), dataset_id, base_revision))
+        expires = datetime.now(UTC) + timedelta(hours=get_settings().DATASET_TTL_HOURS)
+        db.execute("UPDATE datasets SET revision=?,confirmed_revision=NULL,current_rows_json=?,columns_json=?,report_json=?,expires_at=? WHERE dataset_id=? AND revision=?", (revision, _dump(rows), _dump(columns), _dump(report), expires.isoformat(), dataset_id, base_revision))
         updated = db.execute("SELECT * FROM datasets WHERE dataset_id=?", (dataset_id,)).fetchone()
     return _from_row(updated, 0 if restored else None)
 
 
 def confirm(dataset_id: str, revision: int) -> DatasetResponse:
     with transaction(immediate=True) as db:
-        row = db.execute("SELECT revision FROM datasets WHERE dataset_id=?", (dataset_id,)).fetchone()
-        if not row: raise AppException("SESSION_NOT_FOUND", "数据集不存在或已过期", 404)
+        row = _load_row(dataset_id, db)
         if row["revision"] != revision: raise AppException("DATA_REVISION_CONFLICT", "只能确认当前数据版本", 409, {"current_revision": row["revision"]})
         db.execute("UPDATE datasets SET confirmed_revision=? WHERE dataset_id=?", (revision, dataset_id))
         updated = db.execute("SELECT * FROM datasets WHERE dataset_id=?", (dataset_id,)).fetchone()

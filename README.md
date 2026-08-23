@@ -8,11 +8,20 @@
 
 ### 1. 系统配置 (System Configuration)
 - **API 优先策略**：支持配置 OpenAI 兼容的 API Key (如 DeepSeek, Moonshot) 或本地 Ollama 模型地址。
-- **成本控制**：内置 Token 消耗监控与预算保护机制。
+- **成本控制**：内置 Token 消耗监控与预算保护机制（含预留/结算/超额熔断与一键复位）。
 - **连通性检查**：一键测试 LLM 服务连通性。
+
+### 安全机制（多层防护）
+- **传输层**：安全响应头（nosniff / DENY / no-referrer / CSP）；CORS 白名单。
+- **限流层**：每 IP 滑动窗口速率限制，超限返回 429。
+- **鉴权层（可选）**：设置 `API_ACCESS_TOKEN` 后，所有 HTTP 接口需携带 `x-api-token` 头、WebSocket 需携带 `?token=`。
+- **出站防护层**：模型 API 地址强制 http(s)、禁止内网/元数据地址（SSRF 防护）、禁止携带凭据。
+- **数据脱敏层**：手机号/身份证/邮箱边界感知脱敏，同时作用于 LLM 输入与输出。
+- **资金防护层**：预算预留-结算-对账闭环；预留泄漏自动回收；供应商超额熔断与管理复位；embedding 调用同样计费入账。
 
 ### 2. QC 选题顾问 (Topic Consultant)
 - **AI 引导对话**：通过自然语言对话，辅助用户挖掘痛点，明确 QC 课题。
+- **参考资料上传**：支持 Word(.docx) / Excel(.xlsx/.xls) / PPT(.pptx) / PDF / Markdown / CSV / TXT 上传入知识库，检索结果自动作为选题对话与 SMART 评估的参考依据。
 - **选题评估**：基于 SMART 原则自动评估选题的可行性与价值。
 
 ### 3. 数据清洗与预览 (Data Cleaning & Review)
@@ -88,54 +97,30 @@ QCmaker/
 ├── backend/
 │   ├── app/
 │   │   ├── agents/
-│   │   │   ├── discussion.py       # 多智能体研讨编排
-│   │   │   └── topic_consultant.py # 选题顾问智能体
-│   │   ├── api/
-│   │   │   └── endpoints/
-│   │   │       ├── config.py       # 配置接口
-│   │   │       ├── data.py         # 数据处理接口
-│   │   │       ├── discussion.py   # 研讨接口 (WebSocket)
-│   │   │       ├── ppt.py          # PPT 生成接口
-│   │   │       ├── rag.py          # RAG 检索接口
-│   │   │       ├── search.py       # 搜索接口
-│   │   │       ├── topic.py        # 选题接口
-│   │   │       └── visualization.py# 可视化接口
+│   │   │   └── discussion.py       # 多智能体角色图 (LangGraph)
+│   │   ├── api/endpoints/          # config / data / discussion(WS) / ppt / rag / search / topic / visualization
 │   │   ├── core/
-│   │   │   └── config.py           # 核心配置
-│   │   ├── middleware/
-│   │   │   └── pii.py              # PII 敏感信息过滤
-│   │   └── services/
-│   │       ├── chart.py            # 图表生成服务
-│   │       ├── data_cleaning.py    # 数据清洗服务
-│   │       ├── ppt.py              # PPT 生成服务
-│   │       ├── rag.py              # RAG 服务
-│   │       └── search.py           # 搜索服务
-│   ├── data/                       # 本地数据存储
+│   │   │   ├── clients.py          # LLM/Embedding 客户端缓存
+│   │   │   ├── config.py           # 配置与 .env 原子更新（键校验）
+│   │   │   ├── errors.py           # 统一错误与 request_id
+│   │   │   ├── llm_gateway.py      # 预算预留 + PII 脱敏网关
+│   │   │   └── security.py         # 限流 / 安全头 / 访问令牌 / SSRF 防护
+│   │   ├── middleware/pii.py       # PII 脱敏（边界感知）
+│   │   ├── models/contracts.py     # Pydantic 契约
+│   │   ├── repositories/           # SQLite 数据访问
+│   │   └── services/               # chart / data_cleaning / discussion_session / maintenance / model_providers / ppt / rag / search / usage
+│   ├── tests/                      # pytest 回归测试（离线隔离）
 │   ├── main.py                     # 后端入口
-│   ├── requirements.in             # Python 直接依赖
-│   ├── requirements.lock           # 完整锁定依赖
-│   └── README.md                   # 后端文档
+│   └── requirements.in / requirements.lock
 ├── frontend/
 │   ├── src/
-│   │   ├── api/
-│   │   │   └── client.js           # Axios 客户端
-│   │   ├── components/
-│   │   │   ├── ConfigPanel.jsx     # 系统配置面板
-│   │   │   ├── DataReview.jsx      # 数据清洗预览
-│   │   │   ├── DiscussionRoom.jsx  # 研讨室
-│   │   │   ├── PPTPreview.jsx      # PPT 预览
-│   │   │   ├── TopicChat.jsx       # 选题顾问聊天
-│   │   │   └── VisualizationPanel.jsx # 可视化面板
-│   │   ├── App.jsx                 # 主应用组件
-│   │   ├── main.tsx                # 前端入口
-│   │   └── index.css               # 全局样式
-│   ├── index.html
-│   ├── package.json                # npm 依赖
-│   ├── postcss.config.js
-│   ├── tailwind.config.js
-│   ├── vite.config.ts
-│   └── README.md                   # 前端文档
-└── README.md                       # 项目主文档
+│   │   ├── api/                    # axios 客户端（支持 VITE_API_TOKEN）
+│   │   ├── context/                # 向导状态机 (reducer + 持久化)
+│   │   ├── hooks/                  # useDiscussionSocket / useWizardGuard
+│   │   ├── pages/                  # Config / Topic / Data / Discussion / Visualization / PPT
+│   │   └── storage/db.ts           # IndexedDB 持久化（项目会话事件可清理）
+│   └── package.json
+└── README.md
 ```
 
 ## 贡献指南

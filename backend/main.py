@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -9,8 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.api.endpoints import config, data, discussion, ppt, rag, search, topic, visualization
 from backend.app.core.config import PROJECT_ROOT, get_settings
 from backend.app.core.errors import install_error_handlers
+from backend.app.core.security import RateLimitMiddleware, SecurityHeadersMiddleware, rebuild_rate_limiter
 from backend.app.repositories.database import init_database
-from backend.app.services.ppt import cleanup_expired
+from backend.app.services.maintenance import run_cleanup_once, start_periodic_cleanup, stop_periodic_cleanup
 
 
 def configure_logging() -> None:
@@ -21,22 +23,31 @@ def configure_logging() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    configure_logging(); init_database(); cleanup_expired(); yield
+    configure_logging(); init_database()
+    stats = await asyncio.to_thread(run_cleanup_once)
+    logging.getLogger(__name__).info("startup cleanup: %s", stats)
+    cleanup_task = start_periodic_cleanup()
+    rebuild_rate_limiter()
+    yield
+    await stop_periodic_cleanup(cleanup_task)
 
 app = FastAPI(
     title="Smart QC-Circle Generator API",
     description="Backend for QCmaker",
-    version="1.2.0",
+    version="1.3.0",
     lifespan=lifespan,
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=get_settings().cors_origins,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1):\d+$",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(RateLimitMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(config.router, prefix="/api/config", tags=["config"])
 app.include_router(topic.router, prefix="/api/topic", tags=["topic"])

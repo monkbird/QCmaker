@@ -7,7 +7,16 @@ def test_provider_catalog_covers_domestic_and_global_services(client):
     assert {'openai', 'anthropic', 'gemini', 'deepseek', 'qwen', 'ollama'} <= {item['id'] for item in providers}
     assert all('models' not in item for item in providers)
     assert all(item['docs_url'] for item in providers)
-    assert all(item['verified_at'] == '2026-08-16' for item in providers)
+    assert all(item['verified_at'] == '2026-08-22' for item in providers)
+
+
+def test_catalog_covers_coding_plan_gateways(client):
+    response = client.get('/api/config/providers')
+    providers = {item['id']: item for item in response.json()['providers']}
+    assert {'opencode', 'opencode_go', 'glm_coding', 'zai_coding'} <= set(providers)
+    assert providers['opencode']['base_url'].startswith('https://opencode.ai/zen/')
+    assert providers['glm_coding']['kind'] == 'plan'
+    assert all(providers[item]['docs_url'] for item in ('opencode', 'opencode_go', 'glm_coding', 'zai_coding'))
 
 
 def test_model_list_requires_provider_key_instead_of_returning_stale_catalog(client):

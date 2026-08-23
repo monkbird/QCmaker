@@ -184,7 +184,9 @@ langsmith==0.11.0
     #   langchain-community
     #   langchain-core
 lxml==6.1.1
-    # via python-pptx
+    # via
+    #   python-docx
+    #   python-pptx
 markdown-it-py==4.2.0
     # via rich
 mdurl==0.1.2
@@ -297,6 +299,8 @@ python-dateutil==2.9.0.post0
     # via
     #   kubernetes
     #   pandas
+python-docx==1.2.0
+    # via -r backend/requirements.in
 python-dotenv==1.2.2
     # via
     #   -r backend/requirements.in
@@ -404,6 +408,7 @@ typing-extensions==4.16.0
     #   pydantic
     #   pydantic-core
     #   pyee
+    #   python-docx
     #   python-pptx
     #   sqlalchemy
     #   typing-inspection
