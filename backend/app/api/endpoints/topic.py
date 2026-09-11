@@ -31,9 +31,9 @@ def _collect_references(documents) -> list[str]:
     return references
 
 
-async def _search_references(query: str, k: int = 3) -> list[str]:
+async def _search_references(query: str, k: int = 3, project_id: str | None = None) -> list[str]:
     try:
-        documents = await rag_service.search(query, k)
+        documents = await rag_service.search(query, k, project_id)
         return _collect_references(documents)
     except Exception:
         logger.info("rag references unavailable", exc_info=True)
@@ -41,12 +41,13 @@ async def _search_references(query: str, k: int = 3) -> list[str]:
 
 
 class TopicEvaluateRequest(BaseModel):
+    project_id: str | None = Field(default=None, min_length=1, max_length=100)
     topic: str = Field(min_length=4, max_length=2000)
 
 
 @router.post("/chat", response_model=TopicChatResponse)
 async def chat_with_consultant(request: TopicChatRequest):
-    references = await _search_references(request.message)
+    references = await _search_references(request.message, project_id=request.project_id)
     system_prompt = CHAT_PROMPT
     if references:
         block = "\n".join(f"- {item}" for item in references)
@@ -57,7 +58,7 @@ async def chat_with_consultant(request: TopicChatRequest):
 
 @router.post("/evaluate", response_model=TopicEvaluation)
 async def evaluate_topic(request: TopicEvaluateRequest):
-    references = await _search_references(request.topic)
+    references = await _search_references(request.topic, project_id=request.project_id)
     reference_block = "\n".join(f"- {item}" for item in references) if references else "（无可检索的历史资料）"
     prompt = f"课题：{request.topic}\n\n可参考的历史/内部资料：\n{reference_block}"
     raw = await chat([{"role": "system", "content": EVALUATION_PROMPT}, {"role": "user", "content": prompt}], role="topic")

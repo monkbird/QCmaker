@@ -14,7 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-ENV_PATH = PROJECT_ROOT / ".env"
+ENV_PATH = Path(os.environ.get("QCMAKER_ENV_FILE", str(PROJECT_ROOT / ".env")))
 
 
 class Settings(BaseSettings):

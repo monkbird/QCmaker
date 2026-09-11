@@ -17,7 +17,7 @@ def test_offline_full_flow(client, monkeypatch):
     upload = client.post("/api/data/upload", files={"file": ("data.csv", BytesIO("月份,故障数\n1月,4\n2月,2\n".encode()), "text/csv")}).json()
     confirmed = client.post("/api/data/confirm", json={"dataset_id": upload["dataset_id"], "revision": 0}).json()
     with client.websocket_connect("/api/discussion/ws") as ws:
-        ws.send_json({"type": "start", "session_id": "flow", "client_message_id": "start", "topic": topic, "data_summary": "2行月度数据"})
+        ws.send_json({"type": "start", "session_id": "flow", "client_message_id": "start", "topic": topic, "dataset_id": confirmed["dataset_id"], "revision": 0, "project_id": "p"})
         for _ in range(6): ws.receive_json()
         ws.send_json({"type": "finish", "session_id": "flow", "client_message_id": "finish"})
         ws.receive_json(); summary = ws.receive_json()["summary"]

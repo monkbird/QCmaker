@@ -13,29 +13,38 @@ def offline_rag(monkeypatch):
         def __init__(self):
             self.docs = []
 
-        def add_documents(self, docs):
+        def add_documents(self, docs, ids=None):
             self.docs.extend(docs)
 
-        def similarity_search(self, query, k=4):
+        def get(self, where=None, limit=None):
+            conditions = (where or {}).get('$and', [where or {}])
+            docs = [d for d in self.docs if all(all(d.metadata.get(k) == v for k, v in c.items()) for c in conditions)]
+            docs = docs[:limit] if limit else docs
+            return {'ids': [d.metadata['chunk_id'] for d in docs], 'metadatas': [d.metadata for d in docs]}
+
+        def delete(self, ids):
+            self.docs = [d for d in self.docs if d.metadata['chunk_id'] not in ids]
+
+        def similarity_search(self, query, k=4, filter=None):
             tokens = [token for token in query.split() if token]
-            hits = [doc for doc in self.docs if any(token in doc.page_content for token in tokens)]
-            return (hits or list(self.docs))[:k]
+            docs = [d for d in self.docs if all(d.metadata.get(key) == value for key, value in (filter or {}).items())]
+            hits = [doc for doc in docs if any(token in doc.page_content for token in tokens)]
+            return (hits or docs)[:k]
 
     store = FakeStore()
     monkeypatch.setattr(rag_service, "_check_init", lambda: None)
     monkeypatch.setattr(rag_service, "vector_store", store)
-    monkeypatch.setattr(rag_service, "_add_accounted", lambda splits: store.add_documents(splits) or len(splits))
     return rag_service
 
 
 def _ingest(client, filename: str, payload: bytes):
-    return client.post("/api/rag/ingest", files={"file": (filename, payload, "application/octet-stream")})
+    return client.post("/api/rag/ingest", data={'project_id': 'test-project'}, files={"file": (filename, payload, "application/octet-stream")})
 
 
 def _search_all(service, query: str):
     import asyncio
 
-    return asyncio.run(service.search(query, 5))
+    return asyncio.run(service.search(query, 5, 'test-project'))
 
 
 def _xlsx_payload() -> bytes:
@@ -165,7 +174,7 @@ def test_topic_chat_injects_references(client, monkeypatch):
     class Doc:
         page_content = "去年课题：泵站故障率下降30%\n详见台账"
 
-    async def fake_search(_query, _k):
+    async def fake_search(_query, _k, project_id=None):
         return [Doc(), Doc()]
 
     monkeypatch.setattr(topic_endpoint, "chat", fake_chat)
@@ -182,10 +191,27 @@ def test_topic_chat_survives_rag_failure(client, monkeypatch):
     async def fake_chat(messages, role=None):
         return "请补充对象与目标值"
 
-    async def broken_search(_query, _k):
+    async def broken_search(_query, _k, project_id=None):
         raise RuntimeError("embedding down")
 
     monkeypatch.setattr(topic_endpoint, "chat", fake_chat)
     monkeypatch.setattr(topic_endpoint.rag_service, "search", broken_search)
     result = client.post("/api/topic/chat", json={"message": "怎么选题"}).json()
     assert result["references_used"] == 0 and result["response"] == "请补充对象与目标值"
+
+
+def test_project_isolation_deduplication_and_delete(client, offline_rag):
+    first = _ingest(client, 'first.txt', b'project A information').json()
+    repeated = _ingest(client, 'first.txt', b'project A information').json()
+    assert first == repeated
+    second = client.post('/api/rag/ingest', data={'project_id': 'other-project'}, files={'file': ('second.txt', b'project B information')}).json()
+    listed = client.get('/api/rag/documents', params={'project_id': 'test-project'}).json()['documents']
+    assert listed == [first]
+    hits = client.post('/api/rag/search', json={'query': 'information', 'project_id': 'test-project'}).json()['results']
+    assert hits and all(item['metadata']['document_id'] == first['document_id'] for item in hits)
+    wrong = client.delete('/api/rag/documents/' + first['document_id'], params={'project_id': 'other-project'}).json()
+    assert wrong['deleted_chunks'] == 0
+    removed = client.delete('/api/rag/documents/' + first['document_id'], params={'project_id': 'test-project'}).json()
+    assert removed['deleted_chunks'] == first['chunks']
+    assert client.get('/api/rag/documents', params={'project_id': 'test-project'}).json()['documents'] == []
+    assert client.get('/api/rag/documents', params={'project_id': 'other-project'}).json()['documents'] == [second]

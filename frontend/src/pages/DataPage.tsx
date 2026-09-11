@@ -1,15 +1,161 @@
-import { CheckOutlined, CloudUploadOutlined, ExperimentOutlined, ReloadOutlined, RobotOutlined, RollbackOutlined } from '@ant-design/icons'
-import { Alert, Button, Card, Checkbox, Empty, Space, Table, Tag, message } from 'antd'
-import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router'
-import { applyCleaning, confirmData, previewCleaning, undoCleaning, uploadData } from '../api/data'
-import { adviseCleaning } from '../api/insight'
-import { errorMessage } from '../api/client'
-import { StepPage } from '../components/StepPage'
-import { useWizard } from '../context/WizardContext'
-import { loadDataset } from '../storage/db'
-import type { CleaningAction, CleaningAdviceItem, CleaningAdviceResponse, CleaningIssue, CleaningRule, DatasetResponse } from '../types/api'
-const ruleFor=(issue:CleaningIssue,override?:CleaningAction):CleaningRule=>({action:override??(issue.issue_type==='empty_row'||issue.issue_type==='total_row'?'drop_rows':issue.issue_type==='missing'?'forward_fill':issue.issue_type==='type_conversion'?'convert_number':'keep'),column:issue.column,row_ids:issue.row_ids})
-const actionLabel:Record<CleaningAction,string>=({keep:'保留',drop_rows:'删除行',median:'中位数填补',forward_fill:'向下填充',convert_number:'转数值',convert_percent:'转百分比'} as Record<CleaningAction,string>)
-export function DataPage(){const{state,storeDataset,confirmDataset}=useWizard();const[dataset,setDataset]=useState<DatasetResponse|null>(null);const[file,setFile]=useState<File|null>(null);const[selected,setSelected]=useState<number[]>([]);const[preview,setPreview]=useState<DatasetResponse['rows']|null>(null);const[busy,setBusy]=useState(false);const[advice,setAdvice]=useState<CleaningAdviceResponse|null>(null);const[adviceLoading,setAdviceLoading]=useState(false);const[overrides,setOverrides]=useState<Record<number,CleaningAction>>({});const navigate=useNavigate();useEffect(()=>{if(!state.dataRef)return;void loadDataset(state.dataRef).then(local=>{if(local){setDataset({dataset_id:local.dataset_id,revision:local.revision,confirmed_revision:state.dataConfirmed?local.revision:null,filename:local.filename,columns:local.columns,rows:local.rows,report:local.report});setFile(new File([local.sourceFile],local.filename))}})},[state.dataRef,state.dataConfirmed]);const rules=useMemo(()=>selected.map(index=>dataset?.report.issues[index]).filter((x):x is CleaningIssue=>Boolean(x)).map((issue,pos)=>ruleFor(issue,overrides[selected[pos]])),[selected,dataset,overrides]);const upload=async(next:File)=>{setBusy(true);try{const result=await uploadData(next);await storeDataset(result,next,state.dataRef??undefined);setDataset(result);setFile(next);setSelected([]);setPreview(null);setAdvice(null);setOverrides({});message.success('文件已检测，原始值尚未修改')}catch(e){message.error(errorMessage(e))}finally{setBusy(false)}};const doPreview=async()=>{if(!dataset)return;setBusy(true);try{setPreview((await previewCleaning({dataset_id:dataset.dataset_id,base_revision:dataset.revision,rules})).preview_rows)}catch(e){message.error(errorMessage(e))}finally{setBusy(false)}};const apply=async()=>{if(!dataset||!file)return;setBusy(true);try{const result=await applyCleaning({dataset_id:dataset.dataset_id,base_revision:dataset.revision,rules});await storeDataset(result,file,state.dataRef??undefined);setDataset(result);setPreview(null);setSelected([]);setAdvice(null);setOverrides({});message.success(`已生成 revision ${result.revision}`)}catch(e){message.error(errorMessage(e))}finally{setBusy(false)}};const undo=async()=>{if(!dataset||!file)return;try{const result=await undoCleaning(dataset.dataset_id,dataset.revision);await storeDataset(result,file,state.dataRef??undefined);setDataset(result);setAdvice(null);setOverrides({});message.success('已恢复原始数据，并生成新版本')}catch(e){message.error(errorMessage(e))}};const confirm=async()=>{if(!dataset)return;setBusy(true);try{await confirmData(dataset.dataset_id,dataset.revision);confirmDataset();navigate('/discussion')}catch(e){message.error(errorMessage(e))}finally{setBusy(false)}};const askAdvice=async()=>{if(!dataset)return;setAdviceLoading(true);try{const result=await adviseCleaning(dataset.dataset_id);setAdvice(result);message.success('AI 清洗建议已生成')}catch(e){message.error(errorMessage(e))}finally{setAdviceLoading(false)}};const applyAdviceSelection=()=>{if(!advice||!dataset)return;const actionable=advice.items.filter(item=>item.action!=='keep'&&dataset.report.issues[item.index]);const nextOverrides={...overrides};for(const item of actionable)nextOverrides[item.index]=item.action;setOverrides(nextOverrides);setSelected(current=>Array.from(new Set([...current,...actionable.map(item=>item.index)])));message.success(`已按建议勾选 ${actionable.length} 项，请预览影响后应用`)};const columns=dataset?.columns.map(c=>({title:<span>{c.name}<small className="column-type">{c.inferred_type}</small></span>,dataIndex:c.name,key:c.name,render:(_:unknown,row:DatasetResponse['rows'][number])=>String(row.values[c.name]??'-')}))??[];const displayed=preview??dataset?.rows??[];return <StepPage wide eyebrow="03 · VERIFY" title="检测与确认数据" description="规则先行、AI 建议辅助；所有规则先预览影响再写入新版本。" aside={dataset&&<Space><Tag>rev {dataset.revision}</Tag><Tag color={state.dataConfirmed?'success':'processing'}>{state.dataConfirmed?'已确认':'待确认'}</Tag></Space>} actions={<><Button icon={<RollbackOutlined/>} disabled={!dataset||dataset.revision===0} onClick={()=>void undo()}>撤销</Button><Button icon={<RobotOutlined/>} disabled={!dataset||busy} loading={adviceLoading} onClick={()=>void askAdvice()}>AI 清洗建议</Button>{preview?<Button icon={<ExperimentOutlined/>} onClick={()=>void apply()}>应用预览规则</Button>:<Button icon={<ExperimentOutlined/>} disabled={!rules.length} onClick={()=>void doPreview()}>预览影响</Button>}<Button type="primary" icon={<CheckOutlined/>} disabled={!dataset} loading={busy} onClick={()=>void confirm()}>确认数据</Button></>}>{!dataset?<label className="upload-zone"><input type="file" accept=".csv,.xls,.xlsx" hidden onChange={e=>{const next=e.target.files?.[0];if(next)void upload(next)}}/><CloudUploadOutlined/><b>{busy?'正在检测…':'选择数据文件'}</b><span>CSV / XLS / XLSX · 最大 10MB · 5000 行</span></label>:<div className="data-layout"><Card className="issue-panel" title={`检测项 · ${dataset.report.issues.length}`} extra={<label className="replace-file"><input hidden type="file" accept=".csv,.xls,.xlsx" onChange={e=>{const next=e.target.files?.[0];if(next)void upload(next)}}/>替换文件</label>}>{dataset.report.issues.length===0?<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未发现明显问题"/>:<div className="issue-list">{dataset.report.issues.map((issue,index)=><Checkbox key={`${issue.issue_type}-${index}`} checked={selected.includes(index)} onChange={e=>setSelected(e.target.checked?[...selected,index]:selected.filter(x=>x!==index))}><span><b>{issue.issue_type}</b><small>{issue.column??'整行'} · {issue.row_ids.length} 行{overrides[index]&&<Tag style={{marginLeft:6}} color="purple">AI:{actionLabel[overrides[index]]}</Tag>}</small></span></Checkbox>)}</div>}
-      {advice&&<Alert className="advice-panel" type="success" showIcon icon={<RobotOutlined/>} style={{marginTop:12}} message={`AI 顾问：${advice.overall}`} description={<div>{advice.items.map((item:CleaningAdviceItem)=>{const issue=dataset.report.issues[item.index];if(!issue)return null;return <div key={item.index} style={{marginBottom:4}}><Tag color="purple">{actionLabel[item.action]}</Tag><b>{issue.issue_type}</b><small> {issue.column??'整行'} · {item.reason}</small></div>})}<Space style={{marginTop:8}}><Button size="small" type="primary" ghost onClick={applyAdviceSelection} disabled={!advice.items.some(item=>item.action!=='keep')}>按建议勾选</Button><Button size="small" icon={<ReloadOutlined/>} onClick={()=>void askAdvice()}>重新生成</Button><small>模型：{advice.model}</small></Space></div>}/>}</Card><Card className="table-panel" title={preview?'规则预览':'当前数据'} extra={<span>{displayed.length} 行 × {columns.length} 列</span>}><Table rowKey="row_id" size="small" columns={columns} dataSource={displayed.slice(0,200)} scroll={{x:'max-content',y:480}} pagination={false}/></Card></div>}</StepPage>}
+import { CheckOutlined, CloudUploadOutlined, ExperimentOutlined, RobotOutlined, RollbackOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Checkbox, Empty, Select, Space, Table, Tag, message } from 'antd';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router';
+import { applyCleaning, confirmData, previewCleaning, undoCleaning, uploadData } from '../api/data';
+import { adviseCleaning } from '../api/insight';
+import { errorMessage } from '../api/client';
+import { StepPage } from '../components/StepPage';
+import { useWizard } from '../context/WizardContext';
+import { loadDataset } from '../storage/db';
+import type { CleaningAction, CleaningAdviceResponse, CleaningApplyRequest, CleaningIssue, CleaningRule, DatasetResponse } from '../types/api';
+const actionLabel: Record<CleaningAction, string> = { keep: '保留', drop_rows: '删除行', median: '中位数填补', forward_fill: '向下填充', convert_number: '转数值', convert_percent: '转百分比' };
+const issueLabel: Record<CleaningIssue['issue_type'], string> = { empty_row: '空行', total_row: '合计行', missing: '缺失值', outlier: '异常值', type_conversion: '类型转换' };
+function defaultAction(issue: CleaningIssue): CleaningAction {
+    return (issue.suggested_actions.find(action => action !== 'keep') ?? 'keep') as CleaningAction;
+}
+interface Preview {
+    request: CleaningApplyRequest;
+    signature: string;
+    rows: DatasetResponse['rows'];
+}
+export function DataPage() {
+    const { state, storeDataset, confirmDataset } = useWizard();
+    const [dataset, setDataset] = useState<DatasetResponse | null>(null);
+    const [file, setFile] = useState<File | null>(null);
+    const [selected, setSelected] = useState<number[]>([]);
+    const [overrides, setOverrides] = useState<Record<number, CleaningAction>>({});
+    const [preview, setPreview] = useState<Preview | null>(null);
+    const [advice, setAdvice] = useState<CleaningAdviceResponse | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [page, setPage] = useState(1);
+    const [pageSize, setPageSize] = useState(50);
+    const locked = useRef(false);
+    const navigate = useNavigate();
+    useEffect(() => {
+        let disposed = false;
+        if (state.dataRef)
+            void loadDataset(state.dataRef).then(local => {
+                if (!local || disposed)
+                    return;
+                setDataset({ ...local, confirmed_revision: state.dataConfirmed ? local.revision : null });
+                setFile(new File([local.sourceFile], local.filename));
+            }).catch(e => message.error(errorMessage(e)));
+        return () => { disposed = true; };
+    }, [state.dataRef, state.datasetRevision, state.dataConfirmed]);
+    const rules = useMemo<CleaningRule[]>(() => selected.flatMap(index => {
+        const issue = dataset?.report.issues[index];
+        return issue ? [{ action: overrides[index] ?? defaultAction(issue), column: issue.column, row_ids: [...issue.row_ids] }] : [];
+    }), [selected, overrides, dataset]);
+    const request = dataset ? { dataset_id: dataset.dataset_id, base_revision: dataset.revision, rules } : null;
+    const signature = JSON.stringify(request);
+    const activePreview = preview?.signature === signature ? preview : null;
+    const clearDerived = () => { setSelected([]); setOverrides({}); setPreview(null); setAdvice(null); setPage(1); };
+    const run = async (operation: () => Promise<void>) => {
+        if (locked.current)
+            return;
+        locked.current = true;
+        setBusy(true);
+        try {
+            await operation();
+        }
+        catch (error) {
+            message.error(errorMessage(error));
+        }
+        finally {
+            locked.current = false;
+            setBusy(false);
+        }
+    };
+    const upload = (next: File) => run(async () => {
+        if (next.size > 10 * 1024 * 1024)
+            throw new Error('文件不能超过 10MB');
+        const result = await uploadData(next);
+        // A replacement is a new dataset, even when both versions are zero.
+        await storeDataset(result, next);
+        setDataset(result);
+        setFile(next);
+        clearDerived();
+        message.success('文件已检测，原始值尚未修改');
+    });
+    const doPreview = () => run(async () => {
+        if (!request || !rules.length)
+            return;
+        const snapshot = structuredClone(request);
+        const result = await previewCleaning(snapshot);
+        setPreview({ request: snapshot, signature: JSON.stringify(snapshot), rows: result.preview_rows });
+        setPage(1);
+    });
+    const apply = () => run(async () => {
+        if (!activePreview || !file)
+            return;
+        const result = await applyCleaning(activePreview.request);
+        await storeDataset(result, file, state.dataRef ?? undefined);
+        setDataset(result);
+        clearDerived();
+        message.success('清洗已应用，请核验当前数据');
+    });
+    const undo = () => run(async () => {
+        if (!dataset || !file)
+            return;
+        const result = await undoCleaning(dataset.dataset_id, dataset.revision);
+        await storeDataset(result, file, state.dataRef ?? undefined);
+        setDataset(result);
+        clearDerived();
+        message.success('已恢复原始数据，请重新确认');
+    });
+    const confirm = () => run(async () => {
+        if (!dataset || activePreview)
+            return;
+        await confirmData(dataset.dataset_id, dataset.revision);
+        await confirmDataset();
+        navigate('/discussion');
+    });
+    const askAdvice = () => run(async () => {
+        if (!dataset)
+            return;
+        setAdvice(await adviseCleaning(dataset.dataset_id));
+        message.success('AI 清洗建议已生成');
+    });
+    const useAdvice = () => {
+        if (!advice || !dataset || busy)
+            return;
+        const items = advice.items.filter(item => dataset.report.issues[item.index]?.suggested_actions.includes(item.action));
+        setSelected(items.filter(item => item.action !== 'keep').map(item => item.index));
+        setOverrides(Object.fromEntries(items.map(item => [item.index, item.action])));
+        setPreview(null);
+    };
+    const columns = dataset?.columns.map(column => ({
+        title: <span>{column.name}<small className="column-type">{column.inferred_type}</small></span>,
+        key: column.name,
+        render: (_: unknown, row: DatasetResponse['rows'][number]) => {
+            const value = row.values[column.name];
+            return column.display_format === 'percent' && typeof value === 'number' ? `${Number((value * 100).toFixed(6))}%` : String(value ?? '—');
+        },
+    })) ?? [];
+    const displayed = activePreview?.rows ?? dataset?.rows ?? [];
+    return <StepPage wide eyebrow="03 · VERIFY" title="检测与确认数据" description="先预览规则影响，再应用并确认；可以翻页检查全部数据。" aside={dataset && <Space><Tag>版本 {dataset.revision}</Tag><Tag color={state.dataConfirmed ? 'success' : 'processing'}>{state.dataConfirmed ? '已确认' : '待确认'}</Tag></Space>} actions={<>
+      <Button icon={<RollbackOutlined />} disabled={busy || !dataset || dataset.revision === 0} onClick={() => void undo()}>恢复原始数据</Button>
+      <Button icon={<RobotOutlined />} disabled={busy || !dataset} onClick={() => void askAdvice()}>AI 清洗建议</Button>
+      {activePreview ? <><Button disabled={busy} onClick={() => setPreview(null)}>取消预览</Button><Button icon={<ExperimentOutlined />} disabled={busy} onClick={() => void apply()}>应用预览规则</Button></> : <Button icon={<ExperimentOutlined />} disabled={busy || !rules.length} onClick={() => void doPreview()}>预览影响</Button>}
+      <Button type="primary" icon={<CheckOutlined />} disabled={busy || !dataset || !!activePreview || dataset.rows.length === 0} onClick={() => void confirm()}>确认数据</Button>
+    </>}>
+    {!dataset ? <label className="upload-zone"><input type="file" aria-label="选择数据文件" accept=".csv,.xls,.xlsx" hidden disabled={busy} onChange={e => { const next = e.target.files?.[0]; if (next)
+            void upload(next); e.target.value = ''; }}/><CloudUploadOutlined /><b>{busy ? '正在检测…' : '选择数据文件'}</b><span>CSV / XLS / XLSX · 最大 10MB · 5000 行</span></label> : <div className="data-layout">
+      <Card className="issue-panel" title={`检测项 · ${dataset.report.issues.length}`} extra={<label className="replace-file"><input hidden aria-label="替换数据文件" type="file" accept=".csv,.xls,.xlsx" disabled={busy} onChange={e => { const next = e.target.files?.[0]; if (next)
+            void upload(next); e.target.value = ''; }}/>替换文件</label>}>
+        {dataset.report.issues.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="未发现明显问题"/> : <div className="issue-list">{dataset.report.issues.map((issue, index) => <div key={`${issue.issue_type}-${index}`}>
+          <Checkbox disabled={busy} checked={selected.includes(index)} onChange={e => { setSelected(current => e.target.checked ? [...current, index] : current.filter(x => x !== index)); setPreview(null); }}><span><b>{issueLabel[issue.issue_type]}</b><small>{issue.column ?? '整行'} · {issue.row_ids.length} 行</small></span></Checkbox>
+          <Select aria-label={`第${index + 1}项处理方式`} size="small" disabled={busy} value={overrides[index] ?? defaultAction(issue)} options={issue.suggested_actions.map(value => ({ value, label: actionLabel[value as CleaningAction] ?? value }))} onChange={value => { setOverrides(current => ({ ...current, [index]: value })); setPreview(null); }}/>
+          <Button type="link" size="small" onClick={() => { const position = displayed.findIndex(row => issue.row_ids.includes(row.row_id)); if (position >= 0)
+                    setPage(Math.floor(position / pageSize) + 1); }}>定位首行</Button>
+        </div>)}</div>}
+        {advice && <Alert style={{ marginTop: 12 }} type="info" showIcon message={`AI 顾问：${advice.overall}`} description={<div>{advice.items.map((item, index) => <p key={index}>{dataset.report.issues[item.index] && <><Tag>{actionLabel[item.action]}</Tag>{item.reason}</>}</p>)}<Button disabled={busy} size="small" onClick={useAdvice}>按建议勾选</Button><small> 模型：{advice.model}</small></div>}/>}
+      </Card>
+      <Card className="table-panel" title={activePreview ? '规则预览（尚未应用）' : '当前数据'} extra={<span>{displayed.length} 行 × {columns.length} 列</span>}>
+        {activePreview && <Alert type="info" message="确认预览后应用规则；取消预览可以保留当前数据。"/>}
+        <Table rowKey="row_id" size="small" columns={columns} dataSource={displayed} scroll={{ x: 'max-content', y: 480 }} pagination={{ current: page, pageSize, showSizeChanger: true, pageSizeOptions: [20, 50, 100, 200], showTotal: total => `共 ${total} 行`, onChange: (next, size) => { setPage(next); setPageSize(size); } }}/>
+      </Card>
+    </div>}
+  </StepPage>;
+}

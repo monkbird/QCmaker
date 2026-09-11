@@ -1,6 +1,8 @@
-﻿
+from backend.tests.test_discussion_integrity import dataset
+
 
 def test_ws_session_finish_and_resume(client, monkeypatch):
+    dataset_id = dataset(client)
     from backend.app.services import discussion_session
 
     async def fake_chat(messages, role=None):
@@ -10,7 +12,7 @@ def test_ws_session_finish_and_resume(client, monkeypatch):
 
     monkeypatch.setattr(discussion_session, "chat", fake_chat)
     with client.websocket_connect("/api/discussion/ws") as ws:
-        ws.send_json({"type": "start", "session_id": "s1", "client_message_id": "c1", "topic": "降低故障率", "data_summary": "近10月"})
+        ws.send_json({"type": "start", "session_id": "s1", "client_message_id": "c1", "topic": "降低故障率", "dataset_id": dataset_id, "revision": 0, "project_id": "p"})
         events = [ws.receive_json() for _ in range(6)]
         assert [event["event_seq"] for event in events] == list(range(1, 7))
         assert events[-1]["type"] == "round_done"
@@ -26,6 +28,7 @@ def test_ws_session_finish_and_resume(client, monkeypatch):
 
 
 def test_ws_deduplicates_client_message(client, monkeypatch):
+    dataset_id = dataset(client)
     from backend.app.services import discussion_session
     calls = 0
 
@@ -33,7 +36,7 @@ def test_ws_deduplicates_client_message(client, monkeypatch):
         nonlocal calls; calls += 1; return "ok"
 
     monkeypatch.setattr(discussion_session, "chat", fake_chat)
-    command = {"type": "start", "session_id": "s2", "client_message_id": "same", "topic": "课题", "data_summary": "摘要"}
+    command = {"type": "start", "session_id": "s2", "client_message_id": "same", "topic": "课题", "dataset_id": dataset_id, "revision": 0, "project_id": "p"}
     with client.websocket_connect("/api/discussion/ws") as ws:
         ws.send_json(command)
         for _ in range(6): ws.receive_json()

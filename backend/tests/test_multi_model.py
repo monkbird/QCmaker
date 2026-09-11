@@ -58,7 +58,7 @@ def test_config_update_saves_role_models_and_credentials(client):
     assert "sk-ds-1" not in json.dumps(payload)
 
 
-async def _empty_rag(_query, _k):
+async def _empty_rag(_query, _k, project_id=None):
     return []
 
 
@@ -70,7 +70,7 @@ def test_topic_evaluate_returns_scores_and_references(client, monkeypatch):
         captured["role"] = role; captured["prompt"] = messages[-1]["content"]
         return '{"specific":5,"measurable":3,"achievable":4,"relevant":5,"time_bound":2,"verdict":"基本可行","suggestions":["补充目标值"]}'
 
-    async def fake_rag_search(_query, _k):
+    async def fake_rag_search(_query, _k, project_id=None):
         class Doc:
             page_content = "历史课题：降低设备故障率"
         return [Doc()]

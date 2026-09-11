@@ -1,6 +1,7 @@
-﻿import json
+import json
 
 from backend.app.agents.discussion import ROLE_PROMPTS
+from backend.tests.test_discussion_integrity import dataset
 
 
 def _fake_chat_factory(fail_once_roles: set[str], routed: list[str]):
@@ -32,12 +33,13 @@ def _drain(ws, count):
 
 
 def test_transient_error_is_recoverable_and_requeues(client, monkeypatch):
+    dataset_id = dataset(client)
     from backend.app.repositories.database import connect
     from backend.app.services import discussion_session
 
     monkeypatch.setattr(discussion_session, "chat", _fake_chat_factory({"analyst"}, ["researcher", "analyst", "critic"]))
     with client.websocket_connect("/api/discussion/ws") as ws:
-        ws.send_json({"type": "start", "session_id": "rec1", "client_message_id": "c1", "topic": "降低故障率", "data_summary": "近10月数据"})
+        ws.send_json({"type": "start", "session_id": "rec1", "client_message_id": "c1", "topic": "降低故障率", "dataset_id": dataset_id, "revision": 0, "project_id": "p"})
         # exact sequence: ack(1) moderator(2) researcher(3) error(4)
         events = _drain(ws, 4)
         assert events[0]["type"] == "ack"
@@ -64,6 +66,7 @@ def test_transient_error_is_recoverable_and_requeues(client, monkeypatch):
 
 
 def test_fatal_error_keeps_terminal_state(client, monkeypatch):
+    dataset_id = dataset(client)
     from backend.app.core.errors import AppException
     from backend.app.repositories.database import connect
     from backend.app.services import discussion_session
@@ -73,7 +76,7 @@ def test_fatal_error_keeps_terminal_state(client, monkeypatch):
 
     monkeypatch.setattr(discussion_session, "chat", bad_chat)
     with client.websocket_connect("/api/discussion/ws") as ws:
-        ws.send_json({"type": "start", "session_id": "rec2", "client_message_id": "c1", "topic": "课题", "data_summary": "摘要"})
+        ws.send_json({"type": "start", "session_id": "rec2", "client_message_id": "c1", "topic": "课题", "dataset_id": dataset_id, "revision": 0, "project_id": "p"})
         events = _drain(ws, 2)  # ack(1) error(2)
     assert events[-1]["type"] == "error" and events[-1]["recoverable"] is False
     db = connect()
@@ -85,12 +88,13 @@ def test_fatal_error_keeps_terminal_state(client, monkeypatch):
 
 
 def test_user_message_not_duplicated_across_recovery(client, monkeypatch):
+    dataset_id = dataset(client)
     from backend.app.repositories.database import connect
     from backend.app.services import discussion_session
 
     monkeypatch.setattr(discussion_session, "chat", _fake_chat_factory({"critic"}, ["analyst", "critic"]))
     with client.websocket_connect("/api/discussion/ws") as ws:
-        ws.send_json({"type": "start", "session_id": "rec3", "client_message_id": "c0", "topic": "课题", "data_summary": "摘要"})
+        ws.send_json({"type": "start", "session_id": "rec3", "client_message_id": "c0", "topic": "课题", "dataset_id": dataset_id, "revision": 0, "project_id": "p"})
         # ack(1) moderator(2) analyst(3) error(critic fails once)(4)
         events = _drain(ws, 4)
         assert events[-1]["type"] == "error"

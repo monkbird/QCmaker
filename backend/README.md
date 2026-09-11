@@ -14,7 +14,7 @@
 
 ### 2. 知识检索 (RAG & Search)
 - **RAG System**: 基于 ChromaDB 的本地知识库，支持上传文档并进行语义检索。
-- **Web Search**: 集成 Tavily/Google Search API，为智能体提供实时网络信息补充。
+- **Web Search**: 集成 Tavily API，为智能体提供实时网络信息补充。
 - **PII Redaction**: 内置敏感信息过滤中间件，保护用户数据隐私。
 
 ### 3. 数据处理 (Data Processing)
@@ -32,7 +32,7 @@
 - **向量数据库**: ChromaDB
 - **数据分析**: Pandas, NumPy
 - **PPT 生成**: python-pptx
-- **搜索服务**: Tavily API / Google Custom Search
+- **搜索服务**: Tavily API
 - **API 客户端**: OpenAI 兼容协议，内置国内外主流服务商与 Ollama
 
 ## 安装与运行
@@ -76,7 +76,7 @@ TAVILY_API_KEY=your_tavily_key
 
 ```bash
 # 开发模式 (支持热重载)
-uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 服务启动后，API 文档地址：
@@ -124,3 +124,11 @@ backend/
 ## 许可证
 
 MIT License
+
+## 数据与模型边界
+
+知识库接口要求 `project_id`，提供 `GET /api/rag/documents`、`DELETE /api/rag/documents/{document_id}`（查询参数 project_id）。选题 chat/evaluate 也应传 project_id；无项目不检索资料。研讨 start 必须提供 project_id、dataset_id、revision，数据需先确认。
+
+聊天、文档 embedding、查询 embedding、连通性测试均纳入预算。已发送但费用未知的调用持续保留占用，不按数据集过期时间抹除；未知模型应补充价格并对账。外部模型连接禁用代理/重定向并绑定经校验的公网地址。保存凭据绑定服务地址，变更地址不能隐式转发旧密钥。
+
+pytest 在导入应用前设置临时空配置，重置角色/凭据及存储，使用离线DNS并阻断外部TCP；不加载本机真实 `.env`。也可用 `QCMAKER_ENV_FILE` 显式指定配置路径。

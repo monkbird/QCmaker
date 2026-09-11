@@ -1,24 +1,122 @@
-import { createContext, useContext, useEffect, useMemo, useReducer, useState, type ReactNode } from 'react'
-import type { EChartsOption } from 'echarts'
-import { getConfig } from '../api/config'
-import { getDataset, uploadData } from '../api/data'
-import { errorMessage } from '../api/client'
-import type { DatasetResponse, DiscussionSummary, PPTResult } from '../types/api'
-import type { DiscussionEvent } from '../types/discussion'
-import { clearProject, loadDataset, loadProjectState, saveChartImage, saveDataset, saveDiscussionEvent, saveProjectState } from '../storage/db'
-import { createInitialState, wizardReducer } from './wizardReducer'
-import type { WizardState } from './wizardTypes'
-
-interface WizardValue {state:WizardState;notice:string|null;setConfigStatus:(status:WizardState['configStatus'])=>void;setTopic:(topic:string)=>void;storeDataset:(dataset:DatasetResponse,file:File,dataRef?:string)=>Promise<string>;confirmDataset:()=>void;appendEvent:(event:DiscussionEvent)=>Promise<void>;setSession:(id:string)=>void;setSummary:(summary:DiscussionSummary)=>void;setChart:(option:EChartsOption,blob:Blob)=>Promise<void>;setPpt:(result:PPTResult)=>void;reset:()=>Promise<void>}
-const Context=createContext<WizardValue|null>(null)
-const STORAGE_KEY='qcmaker_wizard'
-
-export function WizardProvider({children}:{children:ReactNode}){
-  const[state,dispatch]=useReducer(wizardReducer,undefined,createInitialState);const[notice,setNotice]=useState<string|null>(null)
-  useEffect(()=>{void(async()=>{try{const saved=JSON.parse(sessionStorage.getItem(STORAGE_KEY)??'{}') as Partial<WizardState>;const projectId=saved.currentProjectId??crypto.randomUUID();const project=await loadProjectState(projectId);let hydrated:Partial<WizardState>={...saved,currentProjectId:projectId,discussionSummary:project?.discussionSummary??null,chartOption:project?.chartOption??null,pptResult:project?.pptResult??null};if(saved.dataRef){const local=await loadDataset(saved.dataRef);if(local){try{const remote=await getDataset(local.dataset_id);hydrated={...hydrated,datasetRevision:remote.revision,dataConfirmed:remote.confirmed_revision===remote.revision}}catch(error){if(typeof error==='object'&&error!==null&&'code'in error&&error.code==='SESSION_NOT_FOUND'){const fresh=await uploadData(new File([local.sourceFile],local.filename));await saveDataset({...local,dataset_id:fresh.dataset_id,revision:fresh.revision,columns:fresh.columns,rows:fresh.rows,report:fresh.report,updatedAt:Date.now()});hydrated={...hydrated,datasetRevision:fresh.revision,dataConfirmed:false,discussionSessionId:null,lastEventSeq:0,discussionSummary:null,chartOption:null,chartImageRef:null,pptResult:null};setNotice('数据集已过期，已从本地原文件重新上传，请重新确认数据')}}}else hydrated={...hydrated,dataRef:null,datasetRevision:null,dataConfirmed:false}}dispatch({type:'HYDRATE_SUCCESS',payload:hydrated})}catch(error){setNotice(`恢复项目失败：${errorMessage(error)}`);dispatch({type:'HYDRATE_FAILED'})}try{dispatch({type:'SET_CONFIG_STATUS',payload:(await getConfig()).status})}catch{dispatch({type:'SET_CONFIG_STATUS',payload:'degraded'})}})()},[])
-  useEffect(()=>{if(state.hydration!=='ready')return;const light={currentProjectId:state.currentProjectId,topic:state.topic,dataRef:state.dataRef,datasetRevision:state.datasetRevision,dataConfirmed:state.dataConfirmed,discussionSessionId:state.discussionSessionId,lastEventSeq:state.lastEventSeq,chartImageRef:state.chartImageRef,currentPath:location.pathname};sessionStorage.setItem(STORAGE_KEY,JSON.stringify(light))},[state])
-  const persistProject=(next:{discussionSummary?:DiscussionSummary|null;chartOption?:EChartsOption|null;pptResult?:PPTResult|null})=>{(async()=>{const previous=await loadProjectState(state.currentProjectId).catch(()=>null);const sessions=new Set([...(previous?.sessions??[]),...(state.discussionSessionId?[state.discussionSessionId]:[])]);await saveProjectState({projectId:state.currentProjectId,discussionSummary:next.discussionSummary??state.discussionSummary,chartOption:next.chartOption??state.chartOption,pptResult:next.pptResult??state.pptResult,sessions:[...sessions].slice(-20),updatedAt:Date.now()})})().catch(()=>setNotice('当前成果暂未持久化，刷新页面可能丢失'))}
-  const value=useMemo<WizardValue>(()=>({state,notice,setConfigStatus:(status)=>dispatch({type:'SET_CONFIG_STATUS',payload:status}),setTopic:(topic)=>dispatch({type:'SET_TOPIC',payload:topic}),storeDataset:async(dataset,file,existing)=>{const dataRef=existing??crypto.randomUUID();await saveDataset({dataRef,projectId:state.currentProjectId,dataset_id:dataset.dataset_id,revision:dataset.revision,filename:dataset.filename,sourceFile:file,columns:dataset.columns,rows:dataset.rows,report:dataset.report,updatedAt:Date.now()});dispatch({type:'SET_DATA_REF',payload:{dataRef,revision:dataset.revision}});return dataRef},confirmDataset:()=>dispatch({type:'CONFIRM_DATA'}),appendEvent:async(event)=>{await saveDiscussionEvent(event);dispatch({type:'APPEND_DISCUSSION_EVENT',payload:event});if(event.summary)void persistProject({discussionSummary:event.summary,chartOption:null,pptResult:null})},setSession:(id)=>dispatch({type:'SET_DISCUSSION_SESSION',payload:id}),setSummary:(summary)=>{dispatch({type:'SET_DISCUSSION_SUMMARY',payload:summary});void persistProject({discussionSummary:summary,chartOption:null,pptResult:null})},setChart:async(option,blob)=>{const imageRef=crypto.randomUUID();await saveChartImage({chartImageRef:imageRef,projectId:state.currentProjectId,blob,mimeType:blob.type,updatedAt:Date.now()});dispatch({type:'SET_CHART',payload:{option,imageRef}});void persistProject({chartOption:option,pptResult:null})},setPpt:(result)=>{dispatch({type:'SET_PPT_RESULT',payload:result});void persistProject({pptResult:result})},reset:async()=>{await clearProject(state.currentProjectId);dispatch({type:'RESET_PROJECT',payload:crypto.randomUUID()})}}),[state,notice])
-  return <Context.Provider value={value}>{children}</Context.Provider>
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import type { EChartsOption } from 'echarts';
+import { getConfig } from '../api/config';
+import { errorMessage } from '../api/client';
+import type { DatasetResponse, DiscussionSummary, PPTResult } from '../types/api';
+import type { DiscussionEvent } from '../types/discussion';
+import { clearProject, saveChartImage, saveWizardSnapshot, type StoredDataset } from '../storage/db';
+import { createInitialState, wizardReducer } from './wizardReducer';
+import { restoreWizard } from './restoreWizard';
+import type { WizardAction, WizardState } from './wizardTypes';
+interface WizardValue {
+    state: WizardState;
+    notice: string | null;
+    setConfigStatus: (status: WizardState['configStatus']) => void;
+    setTopic: (topic: string) => Promise<void>;
+    storeDataset: (dataset: DatasetResponse, file: File, dataRef?: string) => Promise<string>;
+    confirmDataset: () => Promise<void>;
+    appendEvent: (event: DiscussionEvent) => Promise<void>;
+    setSession: (id: string) => Promise<void>;
+    setSummary: (summary: DiscussionSummary) => Promise<void>;
+    setChart: (option: EChartsOption, blob: Blob) => Promise<void>;
+    setPpt: (result: PPTResult) => Promise<void>;
+    reset: () => Promise<void>;
 }
-export function useWizard(){const value=useContext(Context);if(!value)throw new Error('WizardProvider missing');return value}
+const Context = createContext<WizardValue | null>(null);
+const STORAGE_KEY = 'qcmaker_wizard';
+export function WizardProvider({ children }: {
+    children: ReactNode;
+}) {
+    const [state, setState] = useState(createInitialState);
+    const [notice, setNotice] = useState<string | null>(null);
+    const current = useRef(state);
+    const pending = useRef<Promise<void>>(Promise.resolve());
+    const initialization = useRef<Promise<void> | null>(null);
+    const commit = useCallback((action: WizardAction, event?: DiscussionEvent, expected?: Pick<WizardState, 'currentProjectId' | 'topic' | 'dataRef' | 'datasetRevision'>, dataset?: StoredDataset): Promise<void> => {
+        const job = pending.current.catch(() => undefined).then(async () => {
+            if (expected && (current.current.currentProjectId !== expected.currentProjectId || current.current.topic !== expected.topic || current.current.dataRef !== expected.dataRef || current.current.datasetRevision !== expected.datasetRevision))
+                throw new Error('项目或数据已变化，请重新操作');
+            const next = wizardReducer(current.current, action);
+            if (next === current.current)
+                return;
+            if (next.hydration === 'ready') {
+                await saveWizardSnapshot(next, event, dataset);
+                sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ currentProjectId: next.currentProjectId }));
+            }
+            // Publish only a durable state. A replay after a failed write must retry it.
+            current.current = next;
+            setState(next);
+        });
+        pending.current = job;
+        void job.catch(() => setNotice('项目保存失败，请勿刷新；检查浏览器存储空间后重试'));
+        return job;
+    }, []);
+    useEffect(() => {
+        // StrictMode must not start two recovery uploads.
+        if (initialization.current)
+            return;
+        initialization.current = (async () => {
+            try {
+                const raw: unknown = JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? '{}');
+                const saved = raw && typeof raw === 'object' ? raw as Partial<WizardState> : {};
+                const restored = await restoreWizard(saved);
+                setNotice(restored.notice);
+                await commit({ type: 'HYDRATE_SUCCESS', payload: restored.state });
+            }
+            catch (error) {
+                setNotice(`恢复项目失败：${errorMessage(error)}`);
+                await commit({ type: 'HYDRATE_FAILED' });
+            }
+            try {
+                await commit({ type: 'SET_CONFIG_STATUS', payload: (await getConfig()).status });
+            }
+            catch {
+                await commit({ type: 'SET_CONFIG_STATUS', payload: 'degraded' });
+            }
+        })();
+    }, [commit]);
+    const { currentProjectId, topic, dataRef: scopedDataRef, datasetRevision } = state;
+    const actions = useMemo(() => {
+        const expected = { currentProjectId, topic, dataRef: scopedDataRef, datasetRevision };
+        return {
+            setConfigStatus: (status: WizardState['configStatus']) => { void commit({ type: 'SET_CONFIG_STATUS', payload: status }).catch(() => undefined); },
+            setTopic: (topic: string) => commit({ type: 'SET_TOPIC', payload: topic }, undefined, expected),
+            storeDataset: async (dataset: DatasetResponse, file: File, existing?: string) => {
+                const projectId = currentProjectId;
+                if (current.current.currentProjectId !== projectId || current.current.topic !== topic)
+                    throw new Error('项目已切换，请重新上传');
+                const dataRef = existing ?? crypto.randomUUID();
+                await commit({ type: 'SET_DATA_REF', payload: { dataRef, revision: dataset.revision } }, undefined, expected, { dataRef, projectId, ...dataset, sourceFile: file, updatedAt: Date.now() });
+                return dataRef;
+            },
+            confirmDataset: () => commit({ type: 'CONFIRM_DATA' }, undefined, expected),
+            appendEvent: (event: DiscussionEvent) => commit({ type: 'APPEND_DISCUSSION_EVENT', payload: event }, event, expected),
+            setSession: (id: string) => commit({ type: 'SET_DISCUSSION_SESSION', payload: id }, undefined, expected),
+            setSummary: (summary: DiscussionSummary) => commit({ type: 'SET_DISCUSSION_SUMMARY', payload: summary }, undefined, expected),
+            setChart: async (option: EChartsOption, blob: Blob) => {
+                const before = current.current;
+                const imageRef = crypto.randomUUID();
+                await saveChartImage({ chartImageRef: imageRef, projectId: before.currentProjectId, blob, mimeType: blob.type, updatedAt: Date.now() });
+                if (current.current !== before)
+                    throw new Error('项目状态已变化，请重新确认图表');
+                await commit({ type: 'SET_CHART', payload: { option, imageRef } }, undefined, expected);
+            },
+            setPpt: (result: PPTResult) => commit({ type: 'SET_PPT_RESULT', payload: result }, undefined, expected),
+            reset: async () => {
+                const oldProject = current.current.currentProjectId;
+                await pending.current.catch(() => undefined);
+                await commit({ type: 'RESET_PROJECT', payload: crypto.randomUUID() });
+                await clearProject(oldProject);
+                setNotice(null);
+            },
+        };
+    }, [commit, currentProjectId, topic, scopedDataRef, datasetRevision]);
+    const value = useMemo<WizardValue>(() => ({ state, notice, ...actions }), [state, notice, actions]);
+    return <Context.Provider value={value}>{children}</Context.Provider>;
+}
+export function useWizard() {
+    const value = useContext(Context);
+    if (!value)
+        throw new Error('WizardProvider missing');
+    return value;
+}

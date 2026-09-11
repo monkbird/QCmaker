@@ -4,6 +4,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import math
+from collections import Counter
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -13,6 +15,7 @@ from backend.app.core.errors import AppException
 from backend.app.core.llm_gateway import chat
 from backend.app.models.contracts import DiscussionSummary
 from backend.app.repositories.database import connect, transaction
+from backend.app.repositories.dataset_repository import _from_row, _load_row
 from backend.app.services.rag import rag_service
 from backend.app.services.search import search_service
 
@@ -52,19 +55,46 @@ def accept_command(command: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]
             return ([json.loads(ack[0])] if ack else []), False
         session = db.execute("SELECT status FROM discussion_sessions WHERE session_id=?", (session_id,)).fetchone()
         if kind == "start" and not session:
-            if not command.get("topic") or not command.get("data_summary"): raise AppException("WS_PROTOCOL_ERROR", "start 必须携带 topic 和 data_summary", 400)
-            state = {"topic": command["topic"], "data_summary": command["data_summary"], "history": [], "round": 0}
+            if not command.get("topic") or not command.get("dataset_id") or not command.get("project_id") or type(command.get("revision")) is not int:
+                raise AppException("WS_PROTOCOL_ERROR", "start 必须携带课题、项目和已确认数据版本", 400)
+            dataset = _from_row(_load_row(command["dataset_id"], db))
+            if dataset.revision != command["revision"] or dataset.confirmed_revision != dataset.revision:
+                raise AppException("DATA_REVISION_CONFLICT", "请确认当前数据版本后再开始研讨", 409)
+            statistics = {}
+            for column in dataset.columns:
+                values = [row.values.get(column.name) for row in dataset.rows]
+                present = [value for value in values if value is not None and value != ""]
+                numeric = []
+                for value in present:
+                    try:
+                        number = float(value)
+                        if not isinstance(value, bool) and math.isfinite(number): numeric.append(number)
+                    except (TypeError, ValueError): pass
+                stats = {"count": len(present), "missing": len(values)-len(present)}
+                if numeric and len(numeric) == len(present):
+                    stats.update(min=min(numeric), max=max(numeric), sum=sum(numeric), mean=sum(numeric)/len(numeric))
+                else: stats["frequencies"] = Counter(str(value)[:100] for value in present).most_common(10)
+                statistics[column.name] = stats
+            summary = json.dumps({"rows": len(dataset.rows), "statistics": statistics, "samples": [row.model_dump() for row in dataset.rows[:10]], "quality": {"mode": dataset.report.mode, "issues": [{"type": issue.issue_type, "column": issue.column, "affected_rows": len(issue.row_ids)} for issue in dataset.report.issues], "removed_rows": dataset.report.removed_rows, "filled_cells": dataset.report.filled_cells}}, ensure_ascii=False)
+            state = {"topic": command["topic"], "dataset_id": dataset.dataset_id, "revision": dataset.revision, "project_id": command["project_id"], "data_summary": summary, "history": [], "round": 0}
             db.execute("INSERT INTO discussion_sessions VALUES(?,?,?,?,?,?,?,?)", (session_id, "created", json.dumps(state, ensure_ascii=False), 1, None, 0, None, (datetime.now(UTC) + timedelta(hours=24)).isoformat()))
         elif kind == "start" and session: raise AppException("WS_PROTOCOL_ERROR", "session_id 已存在，请使用 resume 或 recover", 400)
         elif not session: raise AppException("SESSION_NOT_FOUND", "研讨会话不存在", 404)
         elif session["status"] == "finished" and kind in {"message", "finish"}: raise AppException("WS_PROTOCOL_ERROR", "当前会话已经结束", 400)
+        if session and session["status"] in {"round_error", "error"} and kind in {"message", "finish"}:
+            raise AppException("WS_PROTOCOL_ERROR", "请先恢复失败轮次", 400)
+        if kind == "resume":
+            last = command.get("last_event_seq", 0)
+            maximum = db.execute("SELECT next_event_seq-1 FROM discussion_sessions WHERE session_id=?", (session_id,)).fetchone()[0]
+            if type(last) is not int or last < 0 or last > maximum:
+                raise AppException("WS_PROTOCOL_ERROR", "恢复事件序号超出会话范围", 400)
         if kind == "recover":
-            if session["status"] not in {"round_error", "error"}:
+            if session["status"] != "round_error":
                 raise AppException("WS_PROTOCOL_ERROR", "当前会话无需恢复", 400)
             db.execute("UPDATE discussion_commands SET status='pending',picked_at=NULL,completed_at=NULL,error_json=NULL WHERE session_id=? AND status='failed'", (session_id,))
             db.execute("UPDATE discussion_sessions SET status='round_done' WHERE session_id=? AND status IN ('round_error','error')", (session_id,))
         db.execute("INSERT INTO discussion_commands VALUES(?,?,?,?,?,?,?)", (session_id, client_id, json.dumps(command, ensure_ascii=False), "pending", None, None, None))
-        ack = _event(db, session_id, client_id, "ack", {"reply_to_client_message_id": client_id})
+        ack = _event(db, session_id, client_id, "ack", {"reply_to_client_message_id": client_id, "session_status": db.execute("SELECT status FROM discussion_sessions WHERE session_id=?", (session_id,)).fetchone()[0]})
         if kind == "resume":
             last = int(command.get("last_event_seq") or 0); rows = db.execute("SELECT payload_json FROM discussion_events WHERE session_id=? AND event_seq>? ORDER BY event_seq", (session_id, last)).fetchall()
             db.execute("UPDATE discussion_commands SET status='completed',completed_at=? WHERE session_id=? AND client_message_id=?", (_now(), session_id, client_id))
@@ -75,10 +105,16 @@ def accept_command(command: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]
     return [ack], True
 
 
-async def _acquire_lease(session_id: str, client_id: str) -> tuple[str, int]:
+async def _acquire_lease(session_id: str, client_id: str) -> tuple[str, int] | None:
     owner = f"worker_{uuid4().hex}"
     for _ in range(600):
         with transaction(immediate=True) as db:
+            claim = db.execute("SELECT status FROM discussion_commands WHERE session_id=? AND client_message_id=?", (session_id, client_id)).fetchone()
+            if not claim or claim["status"] not in {"pending", "running"}: return None
+            terminal = db.execute("SELECT status FROM discussion_sessions WHERE session_id=?", (session_id,)).fetchone()
+            if terminal and terminal["status"] == "finished":
+                db.execute("UPDATE discussion_commands SET status='completed',completed_at=? WHERE session_id=? AND client_message_id=?", (_now(), session_id, client_id))
+                return None
             row = db.execute("SELECT lease_owner,lease_generation,lease_until FROM discussion_sessions WHERE session_id=?", (session_id,)).fetchone()
             if not row: raise AppException("SESSION_NOT_FOUND", "研讨会话不存在", 404)
             expired = not row["lease_until"] or datetime.fromisoformat(row["lease_until"]) <= datetime.now(UTC)
@@ -118,10 +154,10 @@ async def _route_roles(context: str, start: bool) -> list[str]:
     return allowed if start else ["analyst", "critic"]
 
 
-async def _research_context(topic: str) -> str:
+async def _research_context(topic: str, project_id: str) -> str:
     snippets: list[str] = []
     try:
-        documents = await rag_service.search(topic, 3); snippets.extend(document.page_content[:500] for document in documents)
+        documents = await rag_service.search(topic, 3, project_id); snippets.extend(document.page_content[:500] for document in documents)
     except Exception: logger.info("rag search unavailable during research context", exc_info=True)
     try:
         results = await search_service.search(topic, 3); snippets.extend(str(item.get("content", ""))[:500] for item in results)
@@ -141,12 +177,13 @@ async def execute(command: dict[str, Any]) -> list[dict[str, Any]]:
     lock = _get_lock(session_id)
     async with lock:
         outputs = await _execute_locked(command, session_id, client_id)
-    if not lock.locked(): _locks.pop(session_id, None)
     return outputs
 
 
 async def _execute_locked(command: dict[str, Any], session_id: str, client_id: str) -> list[dict[str, Any]]:
-        owner, generation = await _acquire_lease(session_id, client_id); lease = (owner, generation); stopped = asyncio.Event(); heartbeat = asyncio.create_task(_heartbeat(session_id, owner, generation, stopped))
+        acquired = await _acquire_lease(session_id, client_id)
+        if acquired is None: return []
+        owner, generation = acquired; lease = (owner, generation); stopped = asyncio.Event(); heartbeat = asyncio.create_task(_heartbeat(session_id, owner, generation, stopped))
         db = connect()
         try:
             row = db.execute("SELECT s.state_json,c.payload_json FROM discussion_sessions s JOIN discussion_commands c ON c.session_id=s.session_id WHERE s.session_id=? AND c.client_message_id=?", (session_id, client_id)).fetchone()
@@ -161,7 +198,11 @@ async def _execute_locked(command: dict[str, Any], session_id: str, client_id: s
 
         outputs: list[dict[str, Any]] = []
         kind = command["type"]
-        context = f"课题：{state['topic']}\n数据摘要：{state['data_summary']}\n历史：{json.dumps(state['history'][-12:], ensure_ascii=False)}"
+        # A final report must retain early confirmations and corrections. Send the
+        # complete transcript in one call; provider limits surface as recoverable
+        # errors instead of silently dropping evidence or adding summary calls.
+        history = state['history'] if kind == "finish" else state['history'][-12:]
+        context = f"课题：{state['topic']}\n数据摘要：{state['data_summary']}\n历史：{json.dumps(history, ensure_ascii=False)}"
         try:
             if kind == "message" and not persisted_command.get("_user_appended"):
                 state["history"].append({"agent": "user", "content": command.get("content", "")}); persisted_command["_user_appended"] = True
@@ -185,7 +226,7 @@ async def _execute_locked(command: dict[str, Any], session_id: str, client_id: s
             async def run_role(role_name: str) -> None:
                 nonlocal context
                 if role_name in completed_roles: return
-                role_context = context + (await _research_context(state["topic"]) if role_name == "researcher" else "")
+                role_context = context + (await _research_context(state["topic"], state["project_id"]) if role_name == "researcher" else "")
                 content = await chat([{"role": "system", "content": ROLE_PROMPTS[role_name]}, {"role": "user", "content": role_context}], role=role_name); state["history"].append({"agent": role_name, "content": content}); context += f"\n{role_name}: {content}"
                 completed_roles.add(role_name); persisted_command["_completed_roles"] = list(completed_roles)
                 with transaction(immediate=True) as tx:
@@ -197,15 +238,19 @@ async def _execute_locked(command: dict[str, Any], session_id: str, client_id: s
             if kind == "finish":
                 prompt = f"请把以下QC研讨整理为严格JSON，字段为 problem(string), root_causes(string[]), countermeasures(string[]), summary(string)。不要Markdown。\n{context}"
                 raw = await chat([{"role": "system", "content": ROLE_PROMPTS["writer"] + "只输出合法JSON。"}, {"role": "user", "content": prompt}], role="writer")
-                try: summary = DiscussionSummary.model_validate(json.loads(raw.strip().removeprefix("```json").removesuffix("```")))
-                except Exception: summary = DiscussionSummary(problem=state["topic"], root_causes=[item["content"] for item in state["history"] if item["agent"] == "critic"][-3:], countermeasures=["根据研讨意见制定责任明确、节点清晰的改进措施"], summary=raw)
+                try:
+                    summary = DiscussionSummary.model_validate(json.loads(raw.strip().removeprefix("```json").removesuffix("```")), strict=True)
+                    if not summary.problem.strip() or not summary.summary.strip() or any(not item.strip() for item in [*summary.root_causes, *summary.countermeasures]):
+                        raise ValueError("Summary contains blank text")
+                except ValueError as exc:
+                    raise AppException("DISCUSSION_SUMMARY_INVALID", "总结生成失败：模型未返回有效的结构化成果，请恢复后重试。研讨记录已保留。", 502) from exc
                 with transaction(immediate=True) as tx:
                     outputs.append(_event(tx, session_id, client_id, "finished", {"reply_to_client_message_id": client_id, "summary": summary.model_dump()}, lease)); tx.execute("UPDATE discussion_sessions SET status='finished',state_json=? WHERE session_id=?", (json.dumps(state, ensure_ascii=False), session_id))
+                    tx.execute("UPDATE discussion_commands SET status='completed',completed_at=? WHERE session_id=? AND client_message_id=?", (_now(), session_id, client_id))
             else:
                 with transaction(immediate=True) as tx:
                     outputs.append(_event(tx, session_id, client_id, "round_done", {"reply_to_client_message_id": client_id, "round": state["round"]}, lease)); tx.execute("UPDATE discussion_sessions SET status='round_done',state_json=? WHERE session_id=?", (json.dumps(state, ensure_ascii=False), session_id))
-            with transaction(immediate=True) as tx:
-                _guard_lease(tx, session_id, *lease); tx.execute("UPDATE discussion_commands SET status='completed',completed_at=? WHERE session_id=? AND client_message_id=?", (_now(), session_id, client_id))
+                    _guard_lease(tx, session_id, *lease); tx.execute("UPDATE discussion_commands SET status='completed',completed_at=? WHERE session_id=? AND client_message_id=?", (_now(), session_id, client_id))
         except Exception as exc:
             code = getattr(exc, "code", None) or "INTERNAL_ERROR"
             if code == "SESSION_LEASE_LOST":
@@ -215,6 +260,7 @@ async def _execute_locked(command: dict[str, Any], session_id: str, client_id: s
                 try:
                     with transaction(immediate=True) as tx:
                         outputs.append(_event(tx, session_id, client_id, "error", {"reply_to_client_message_id": client_id, "error": {"code": code, "message": str(exc)}, "recoverable": not fatal}, lease)); tx.execute("UPDATE discussion_sessions SET status=?,state_json=? WHERE session_id=?", ("error" if fatal else "round_error", json.dumps(state, ensure_ascii=False), session_id)); tx.execute("UPDATE discussion_commands SET status='failed',error_json=? WHERE session_id=? AND client_message_id=?", (json.dumps({"code": code, "message": str(exc)}), session_id, client_id))
+                        persist_meta(tx, include_state=False)
                 except AppException as inner:
                     if getattr(inner, "code", None) != "SESSION_LEASE_LOST": logger.exception("failed to persist error event for %s/%s", session_id, client_id)
         finally:

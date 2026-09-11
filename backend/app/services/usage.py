@@ -74,6 +74,13 @@ def release(reservation_id: str | None) -> None:
         with transaction(immediate=True) as db: db.execute("UPDATE reservations SET status='released' WHERE id=? AND status='reserved'", (reservation_id,))
 
 
+def mark_dispatched(reservation_id: str | None) -> None:
+    """A dispatched request may incur cost even if the process dies before settling."""
+    if reservation_id:
+        with transaction(immediate=True) as db:
+            db.execute("UPDATE reservations SET status='usage_unknown' WHERE id=? AND status='reserved'", (reservation_id,))
+
+
 def reserve_embedding(request_id: str, provider: str, model: str, input_texts: list[str]) -> str | None:
     if provider == "local": return None
     settings = get_settings(); tokens = sum(estimate_tokens(text, model) for text in input_texts)
@@ -116,13 +123,12 @@ def sweep_stale_reservations() -> int:
     """Release budget holds leaked by crashed requests; expire ancient unknown-usage holds."""
     now = datetime.now(UTC)
     reserved_cutoff = (now - timedelta(minutes=RESERVED_GRACE_MINUTES)).isoformat()
-    unknown_cutoff = (now - timedelta(hours=get_settings().DATASET_TTL_HOURS)).isoformat()
     changed = 0
     with transaction(immediate=True) as db:
         cursor = db.execute("UPDATE reservations SET status='released' WHERE status='reserved' AND created_at<=?", (reserved_cutoff,))
         changed += cursor.rowcount
-        cursor = db.execute("UPDATE reservations SET status='expired' WHERE status='usage_unknown' AND created_at<=?", (unknown_cutoff,))
-        changed += cursor.rowcount
+        # Completed calls with missing usage/price remain a durable liability.
+        # Dataset retention cannot erase incurred but unreconciled model costs.
     return changed
 
 

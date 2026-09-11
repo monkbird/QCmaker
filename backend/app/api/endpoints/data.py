@@ -1,6 +1,7 @@
 import json
 import logging
 
+import anyio
 from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel
 
@@ -20,6 +21,8 @@ from backend.app.repositories import dataset_repository
 from backend.app.services.data_cleaning import analyze, apply_rules, parse_file, rows_from_frame
 from backend.app.services.model_roles import describe_target
 
+_parse_limiter = anyio.CapacityLimiter(2)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(verify_access_token)])
@@ -31,8 +34,13 @@ async def upload_data(file: UploadFile = File(...)):
         size += len(chunk)
         if size > limit: raise AppException("DATA_FILE_TOO_LARGE", "文件不能超过 10MB", 400, {"limit_bytes": limit})
         chunks.append(chunk)
-    filename = file.filename or "upload.csv"; rows = rows_from_frame(parse_file(b"".join(chunks), filename)); columns, report = analyze(rows)
-    return dataset_repository.create(filename, rows, columns, report)
+    filename = file.filename or "upload.csv"
+    def process():
+        rows = rows_from_frame(parse_file(b"".join(chunks), filename))
+        columns, report = analyze(rows)
+        return dataset_repository.create(filename, rows, columns, report)
+    return await anyio.to_thread.run_sync(process, limiter=_parse_limiter)
+
 
 
 @router.get("/{dataset_id}", response_model=DatasetResponse)
@@ -43,13 +51,13 @@ def get_dataset(dataset_id: str): return dataset_repository.get(dataset_id)
 def preview(request: CleaningApplyRequest):
     dataset = dataset_repository.get(request.dataset_id)
     if dataset.revision != request.base_revision: raise AppException("DATA_REVISION_CONFLICT", "数据版本已变化，请刷新后重试", 409, {"current_revision": dataset.revision})
-    rows, _, report = apply_rules(dataset.rows, request.rules)
+    rows, _, report = apply_rules(dataset.rows, request.rules, source_columns=dataset.columns)
     return CleaningPreviewResponse(dataset_id=request.dataset_id, base_revision=request.base_revision, preview_rows=rows, report=report)
 
 
 @router.post("/apply", response_model=DatasetResponse)
 def apply(request: CleaningApplyRequest):
-    dataset = dataset_repository.get(request.dataset_id); rows, columns, report = apply_rules(dataset.rows, request.rules)
+    dataset = dataset_repository.get(request.dataset_id); rows, columns, report = apply_rules(dataset.rows, request.rules, source_columns=dataset.columns)
     return dataset_repository.update(request.dataset_id, request.base_revision, rows, columns, report)
 
 

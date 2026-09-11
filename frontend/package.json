@@ -9,7 +9,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "npm run build && playwright test",
+    "test:e2e": "tsc -b && vite build --mode test && playwright test",
     "preview": "vite preview"
   },
   "dependencies": {

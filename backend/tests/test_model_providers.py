@@ -1,3 +1,13 @@
+import socket
+
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def offline_dns(monkeypatch):
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda *a, **kw: [(socket.AF_INET, socket.SOCK_STREAM, 6, '', ('8.8.8.8', 443))])
+
+
 def test_provider_catalog_covers_domestic_and_global_services(client):
     response = client.get('/api/config/providers')
     assert response.status_code == 200

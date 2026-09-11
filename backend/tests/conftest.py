@@ -1,3 +1,11 @@
+import os
+import socket
+import tempfile
+from pathlib import Path
+
+# Set before test-module imports: no test should ever read the developer's .env.
+os.environ['QCMAKER_ENV_FILE'] = str(Path(tempfile.gettempdir()) / 'qcmaker-tests-nonexistent' / '.env')
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -21,7 +29,30 @@ ISOLATED_SETTINGS = {
     "CONFIG_REVISION": 0,
     "API_ACCESS_TOKEN": None,
     "RATE_LIMIT_PER_MINUTE": 10_000,
+    "ROLE_MODELS": "{}",
+    "PROVIDER_CREDENTIALS": "{}",
 }
+
+
+@pytest.fixture(autouse=True)
+def offline_network(monkeypatch):
+    def resolve(host, port, *args, **kwargs):
+        import ipaddress
+        try:
+            address = str(ipaddress.ip_address(host))
+        except ValueError:
+            address = '127.0.0.1' if host in {'localhost', '127.1'} else '8.8.8.8'
+        return [(socket.AF_INET6 if ':' in address else socket.AF_INET, socket.SOCK_STREAM, 6, '', (address, port))]
+    original_connect = socket.socket.connect
+    def blocked(sock, address, *args, **kwargs):
+        import sys
+        # Windows implements asyncio's internal socketpair through loopback TCP.
+        if sys._getframe(1).f_code.co_name == '_fallback_socketpair':
+            return original_connect(sock, address, *args, **kwargs)
+        raise AssertionError('Real network access is forbidden in backend tests; mock the provider/transport')
+    monkeypatch.setattr(socket, 'getaddrinfo', resolve)
+    monkeypatch.setattr(socket.socket, 'connect', blocked)
+    monkeypatch.setattr(socket.socket, 'connect_ex', blocked)
 
 
 @pytest.fixture()
@@ -50,6 +81,9 @@ def isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(ppt_service, "OUTPUT_DIR", tmp_path / "generated_ppts")
     monkeypatch.setattr(ppt_service, "TEMPLATE_DIR", tmp_path / "templates")
     monkeypatch.setattr(rag_service, "persist_directory", str(tmp_path / "chroma_db"))
+    monkeypatch.setattr(rag_service, "vector_store", None)
+    monkeypatch.setattr(rag_service, "collection_key", "")
+    monkeypatch.setattr(rag_service, "config_revision", -1)
     return tmp_path
 
 

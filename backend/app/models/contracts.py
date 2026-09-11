@@ -74,6 +74,7 @@ class ChatMessage(BaseModel):
 
 
 class TopicChatRequest(BaseModel):
+    project_id: str | None = Field(default=None, max_length=200)
     message: str = Field(min_length=1, max_length=4000)
     history: list[ChatMessage] = Field(default_factory=list, max_length=50)
 
@@ -215,6 +216,7 @@ class ChartRecommendRequest(BaseModel):
 
 
 class ChartRecommendation(BaseModel):
+    aggregation: Literal["none", "sum", "mean", "count"] | None = None
     chart_type: Literal["bar", "line", "pie"]
     x_axis: str
     y_axis: str

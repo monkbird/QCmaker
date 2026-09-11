@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends
 from backend.app.core.clients import clear_client_cache
 from backend.app.core.config import get_settings, update_settings
 from backend.app.core.errors import AppException
-from backend.app.core.security import validate_outbound_base_url, verify_access_token
+from backend.app.core.security import outbound_http_clients, validate_outbound_base_url, verify_access_token
 from backend.app.models.contracts import BudgetResetResult, ConfigUpdate, ConfigView, ConnectivityCheck, ModelListRequest, ModelListResponse, UsageView
 from backend.app.services.model_providers import PROVIDERS, get_provider
 from backend.app.services.model_roles import ROLE_LABELS, VALID_ROLES, credential_providers, role_models_view
@@ -31,11 +31,13 @@ def _sanitize_role_models(role_models: dict[str, str]) -> dict[str, str]:
     for role, target in role_models.items():
         if role not in VALID_ROLES: raise AppException("CONFIG_INVALID", f"未知的角色槽位: {role}", 400)
         target = str(target).strip()
-        if not target or "|" not in target:
+        if not target:
             continue
+        if "|" not in target:
+            raise AppException("CONFIG_INVALID", "角色分工必须同时指定服务商和模型", 400)
         provider_id, _, model = target.partition("|"); model = model.strip()
         if provider_id not in _CATALOG: raise AppException("PROVIDER_NOT_FOUND", f"角色 {ROLE_LABELS.get(role, role)} 的服务商 {provider_id} 不存在", 404)
-        if provider_id not in {"ollama", "custom"} and not model: raise AppException("MODEL_BASE_URL_REQUIRED", f"角色 {ROLE_LABELS.get(role, role)} 必须填写模型名称", 400)
+        if provider_id != "ollama" and not model: raise AppException("MODEL_BASE_URL_REQUIRED", f"角色 {ROLE_LABELS.get(role, role)} 必须填写模型名称", 400)
         cleaned[role] = f"{provider_id}|{model}"
     return cleaned
 
@@ -48,6 +50,9 @@ def _merge_credentials(updates: dict) -> dict[str, dict]:
         entry = merged.setdefault(provider_id, {})
         api_key = getattr(credential, "api_key", None)
         base_url = getattr(credential, "base_url", None)
+        old_url = entry.get("base_url") or _CATALOG[provider_id].base_url
+        if base_url and base_url.rstrip("/") != old_url.rstrip("/") and entry.get("api_key") and not api_key:
+            raise AppException("LLM_KEY_REQUIRED", "变更服务地址时必须填写该地址对应的 API Key", 400)
         if api_key: entry["api_key"] = api_key.strip()
         if base_url: entry["base_url"] = validate_outbound_base_url(base_url.strip(), allow_private=provider_id == "ollama")
     return merged
@@ -61,6 +66,8 @@ def get_config(): return view()
 def update_config(config: ConfigUpdate):
     settings = get_settings()
     payload = {key.upper(): value for key, value in config.model_dump().items() if value is not None}
+    if (not config.llm_provider or config.llm_provider == settings.LLM_PROVIDER) and config.openai_base_url and config.openai_base_url.rstrip("/") != settings.OPENAI_BASE_URL.rstrip("/") and settings.OPENAI_API_KEY and not config.openai_api_key:
+        raise AppException("LLM_KEY_REQUIRED", "变更服务地址时必须填写该地址对应的 API Key", 400)
     target_provider = payload.get("LLM_PROVIDER")
     if target_provider is not None:
         try:
@@ -68,18 +75,24 @@ def update_config(config: ConfigUpdate):
         except ValueError as exc:
             raise AppException("PROVIDER_NOT_FOUND", "未找到该模型服务商", 404, {"provider": target_provider}) from exc
         switching = target_provider != "ollama" and target_provider != settings.LLM_PROVIDER
+        if switching and not payload.get("OPENAI_BASE_URL"):
+            stored_target = json.loads(settings.PROVIDER_CREDENTIALS or "{}").get(target_provider, {})
+            payload["OPENAI_BASE_URL"] = stored_target.get("base_url") or provider.base_url
         if switching and not payload.get("OPENAI_API_KEY") and not payload.get("USE_LOCAL_LLM"):
             stored = json.loads(settings.PROVIDER_CREDENTIALS or "{}").get(target_provider, {})
             stored_key = stored.get("api_key") if isinstance(stored, dict) else None
-            if stored_key: payload["OPENAI_API_KEY"] = str(stored_key)
+            bound_url = stored.get("base_url") or provider.base_url
+            if stored_key and str(payload.get("OPENAI_BASE_URL") or "").rstrip("/") == bound_url.rstrip("/"):
+                payload["OPENAI_API_KEY"] = str(stored_key)
             else: raise AppException("LLM_KEY_REQUIRED", "切换模型服务商时必须填写该服务商的 API Key", 400)
         if provider.api_style == "anthropic":
             logger.warning("provider %s relies on the OpenAI-compatible gateway endpoint", target_provider)
         if not _CATALOG[provider.id].base_url and not str(payload.get("OPENAI_BASE_URL") or "").strip():
             raise AppException("MODEL_BASE_URL_REQUIRED", "自定义服务必须同时填写 API 地址", 400)
     if "OPENAI_BASE_URL" in payload:
-        allow_private = bool(payload.get("USE_LOCAL_LLM", settings.USE_LOCAL_LLM))
-        payload["OPENAI_BASE_URL"] = validate_outbound_base_url(str(payload["OPENAI_BASE_URL"]), allow_private=allow_private)
+        payload["OPENAI_BASE_URL"] = validate_outbound_base_url(str(payload["OPENAI_BASE_URL"]))
+    if "LOCAL_LLM_URL" in payload:
+        payload["LOCAL_LLM_URL"] = validate_outbound_base_url(str(payload["LOCAL_LLM_URL"]), allow_private=True)
     if config.role_models is not None:
         payload["ROLE_MODELS"] = json.dumps(_sanitize_role_models(config.role_models), ensure_ascii=False)
     if config.provider_credentials is not None and config.provider_credentials:
@@ -103,6 +116,20 @@ def provider_catalog():
     return [asdict(provider) for provider in PROVIDERS]
 
 
+def _bound_key(provider_id: str, base_url: str, explicit_key: str | None):
+    if explicit_key:
+        return explicit_key
+    settings = get_settings()
+    stored = json.loads(settings.PROVIDER_CREDENTIALS or "{}").get(provider_id, {})
+    if isinstance(stored, dict) and stored.get("api_key"):
+        bound = stored.get("base_url") or get_provider(provider_id).base_url
+        if base_url.rstrip("/") == bound.rstrip("/"):
+            return stored["api_key"]
+    if provider_id == settings.LLM_PROVIDER and base_url.rstrip("/") == settings.OPENAI_BASE_URL.rstrip("/"):
+        return settings.OPENAI_API_KEY
+    return None
+
+
 @router.post("/models", response_model=ModelListResponse)
 async def models(request: ModelListRequest):
     settings = get_settings()
@@ -110,9 +137,10 @@ async def models(request: ModelListRequest):
         provider = get_provider(request.provider)
     except ValueError as exc:
         raise AppException("PROVIDER_NOT_FOUND", "未找到该模型服务商", 404, {"provider": request.provider}) from exc
-    base_url = validate_outbound_base_url((request.base_url or provider.base_url).rstrip("/"), allow_private=provider.api_style == "ollama" or settings.USE_LOCAL_LLM)
     stored = json.loads(settings.PROVIDER_CREDENTIALS or "{}").get(request.provider, {})
-    api_key = request.api_key or (stored.get("api_key") if isinstance(stored, dict) else None) or (settings.OPENAI_API_KEY if request.provider == settings.LLM_PROVIDER else None)
+    default_url = settings.LOCAL_LLM_URL if provider.api_style == "ollama" else (stored.get("base_url") or (settings.OPENAI_BASE_URL if request.provider == settings.LLM_PROVIDER else provider.base_url))
+    base_url = validate_outbound_base_url((request.base_url or default_url).rstrip("/"), allow_private=provider.api_style == "ollama")
+    api_key = _bound_key(request.provider, base_url, request.api_key)
     if provider.api_style == "ollama":
         url = f"{base_url.removesuffix('/v1')}/api/tags"; headers = {}
     else:
@@ -122,7 +150,9 @@ async def models(request: ModelListRequest):
         if provider.api_style == "anthropic":
             headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
     try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
+        sync_client, async_client = outbound_http_clients(provider.api_style == "ollama")
+        sync_client.close()
+        async with async_client as client:
             response = await client.get(url, headers=headers); response.raise_for_status(); payload = response.json()
         rows = payload.get("models", []) if provider.api_style == "ollama" else payload.get("data", payload.get("models", []))
         names = sorted({str(row.get("name") if provider.api_style == "ollama" else row.get("id") or row.get("name", "")).removeprefix("models/") for row in rows if isinstance(row, dict)})
@@ -140,17 +170,30 @@ async def models(request: ModelListRequest):
 
 @router.post("/check-connectivity")
 async def check_connectivity(check: ConnectivityCheck):
-    settings = get_settings(); local = check.provider in {"local", "ollama"}; base_url = validate_outbound_base_url(check.base_url or (settings.LOCAL_LLM_URL if local else settings.OPENAI_BASE_URL), allow_private=local or settings.USE_LOCAL_LLM); model = check.model or (settings.LOCAL_LLM_MODEL if local else settings.OPENAI_MODEL); api_key = check.api_key or ("ollama" if local else settings.OPENAI_API_KEY if check.provider == settings.LLM_PROVIDER else None)
+    settings = get_settings(); local = check.provider in {"local", "ollama"}; base_url = validate_outbound_base_url(check.base_url or (settings.LOCAL_LLM_URL if local else settings.OPENAI_BASE_URL), allow_private=local); model = check.model or (settings.LOCAL_LLM_MODEL if local else settings.OPENAI_MODEL); api_key = "ollama" if local else _bound_key(check.provider, base_url, check.api_key)
     if not api_key: raise AppException("LLM_NOT_CONFIGURED", "缺少 API Key", 400)
     started = time.perf_counter()
     headers = {"Authorization": f"Bearer {api_key}", "x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    from uuid import uuid4
+
+    from backend.app.services.usage import mark_dispatched, reserve, settle
+    request_id = f"connect_{uuid4().hex}"
+    reservation = reserve(request_id, "local" if local else check.provider, model, "ping")
+    mark_dispatched(reservation)
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        sync_client, async_client = outbound_http_clients(local)
+        sync_client.close()
+        async with async_client as client:
             if local: response = await client.get(f"{base_url.removesuffix('/v1')}/api/tags")
             else: response = await client.post(f"{base_url.rstrip('/')}/chat/completions", headers=headers, json={"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1})
             response.raise_for_status()
+        usage = {} if local else response.json().get("usage", {})
+        settle(reservation, request_id, "local" if local else check.provider, model, int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0)), usage_known=bool(usage))
         return {"status": "connected", "latency_ms": round((time.perf_counter() - started) * 1000), "model": model, "message": "连接成功"}
-    except httpx.HTTPError as exc: raise AppException("LLM_CONNECT_FAILED", "模型连接失败", 400, {"reason": type(exc).__name__}) from exc
+    except Exception as exc:
+        settle(reservation, request_id, "local" if local else check.provider, model, 0, 0, usage_known=False)
+        if isinstance(exc, AppException): raise
+        raise AppException("LLM_CONNECT_FAILED", "模型连接失败", 400, {"reason": type(exc).__name__}) from exc
 
 
 @router.get("/usage", response_model=UsageView)

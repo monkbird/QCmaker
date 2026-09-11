@@ -25,7 +25,13 @@ ADVISOR_PROMPT = """你是QC图表顾问。根据数据画像选择最能支撑�
 def generate_chart(request: ChartRequest):
     dataset = dataset_repository.get(request.dataset_id)
     if dataset.revision != request.revision or dataset.confirmed_revision != request.revision: raise AppException("DATA_REVISION_CONFLICT", "请先确认当前数据版本", 409)
-    return generate(request, dataset.rows)
+    if request.aggregation is None and any(c.name == request.y_axis and c.display_format == "percent" for c in dataset.columns):
+        request = request.model_copy(update={"aggregation": "mean"})
+    result = generate(request, dataset.rows)
+    if request.aggregation != "count" and any(c.name == request.y_axis and c.display_format == "percent" for c in dataset.columns):
+        result.processing.warnings.append("百分比按小数存储（0.9 = 90%），聚合口径：" + result.processing.aggregation)
+        if "yAxis" in result.option: result.option["yAxis"]["name"] = "比率（1 = 100%）"
+    return result
 
 
 def _rule_recommend(columns) -> tuple[ChartRecommendation, str | None]:
@@ -37,7 +43,7 @@ def _rule_recommend(columns) -> tuple[ChartRecommendation, str | None]:
         category = next((c.name for c in columns if c.name != numeric), None)
     if not numeric or not category: raise AppException("DATA_FORMAT_UNSUPPORTED", "至少需要一个分类列和一个数值列", 422)
     is_time = any(token in category.lower() for token in ("date", "time", "日期", "时间", "月份"))
-    return ChartRecommendation(chart_type="line" if is_time else "bar", x_axis=category, y_axis=numeric, reason="检测到时间序列" if is_time else "分类与数值对比适合柱状图"), None
+    return ChartRecommendation(chart_type="line" if is_time else "bar", x_axis=category, y_axis=numeric, aggregation="mean" if any(c.name == numeric and c.inferred_type == "percent" for c in columns) else "none" if is_time else "sum", reason="检测到时间序列" if is_time else "分类与数值对比适合柱状图"), None
 
 
 @router.post("/recommend", response_model=ChartRecommendation)
@@ -70,12 +76,13 @@ def _validate_recommendation(payload: dict, dataset) -> ChartRecommendation:
     chart_type = str(payload.get("chart_type", ""))
     x_axis = str(payload.get("x_axis", ""))
     y_axis = str(payload.get("y_axis", ""))
-    aggregation = str(payload.get("aggregation", "sum"))
+    default_aggregation = "mean" if any(c.name == y_axis and c.inferred_type == "percent" for c in dataset.columns) else "none" if chart_type == "line" else "sum"
+    aggregation = str(payload.get("aggregation", default_aggregation))
     if chart_type not in {"bar", "line", "pie"}: raise ValueError(f"bad chart_type {chart_type}")
-    if x_axis not in column_names or y_axis not in numeric_names: raise ValueError("axis not in dataset")
-    if aggregation not in {"none", "sum", "mean", "count"}: aggregation = "sum" if chart_type in {"bar", "pie"} else "none"
+    if x_axis not in column_names or y_axis not in (column_names if aggregation == "count" else numeric_names): raise ValueError("axis not in dataset")
+    if aggregation not in {"none", "sum", "mean", "count"}: aggregation = default_aggregation
     reason = str(payload.get("reason", ""))[:400] or "AI 顾问推荐"
-    return ChartRecommendation(chart_type=chart_type, x_axis=x_axis, y_axis=y_axis, reason=reason)
+    return ChartRecommendation(chart_type=chart_type, x_axis=x_axis, y_axis=y_axis, aggregation=aggregation, reason=reason)
 
 
 @router.post("/insight", response_model=ChartInsightResponse)

@@ -5,6 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -29,7 +30,7 @@ def install_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-        return JSONResponse(content=error_payload(request, "CONFIG_INVALID", "请求参数不合法", {"errors": exc.errors()}), status_code=422)
+        return JSONResponse(content=error_payload(request, "REQUEST_INVALID", "请求参数不合法", {"errors": jsonable_encoder(exc.errors(), custom_encoder={ValueError: str})}), status_code=422)
 
     @app.exception_handler(Exception)
     async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import csv
 import io
 import math
 import re
+import zipfile
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -26,16 +28,49 @@ def normalize_scalar(value: Any) -> str | int | float | bool | None:
 
 def parse_file(content: bytes, filename: str) -> pd.DataFrame:
     suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-    if suffix == "csv":
-        frame = None
-        for encoding in ("utf-8-sig", "utf-8", "gb18030"):
-            try: frame = pd.read_csv(io.BytesIO(content), encoding=encoding, dtype=object); break
-            except UnicodeDecodeError: continue
-        if frame is None: raise AppException("DATA_FORMAT_UNSUPPORTED", "CSV 编码无法识别", 400)
-    elif suffix in {"xls", "xlsx"}: frame = pd.read_excel(io.BytesIO(content), dtype=object)
-    else: raise AppException("DATA_FORMAT_UNSUPPORTED", "仅支持 csv、xls、xlsx 文件", 400)
-    if len(frame) > 5000 or len(frame.columns) > 200: raise AppException("DATA_FORMAT_UNSUPPORTED", "数据最多 5000 行、200 列", 400)
-    frame.columns = [str(column).strip() or f"未命名列_{index + 1}" for index, column in enumerate(frame.columns)]
+    try:
+        if suffix == "csv":
+            text = None
+            for encoding in ("utf-8-sig", "gb18030"):
+                try:
+                    text = content.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
+            if text is None: raise ValueError("encoding")
+            reader = csv.reader(io.StringIO(text))
+            header = next(reader)
+            if not header or len(header) > 200: raise ValueError("columns")
+            records = []
+            for record in reader:
+                if not record: continue
+                if len(record) != len(header): raise ValueError("row width")
+                records.append(record)
+                if len(records) > 5000: raise ValueError("rows")
+            frame = pd.DataFrame(records, columns=header).replace("", None)
+        elif suffix in {"xls", "xlsx"}:
+            if suffix == "xlsx" or zipfile.is_zipfile(io.BytesIO(content)):
+                with zipfile.ZipFile(io.BytesIO(content)) as archive:
+                    entries = archive.infolist()
+                    if len(entries) > 2000 or sum(x.file_size for x in entries) > 40 * 1024 * 1024:
+                        raise ValueError("expanded workbook too large")
+            frame = pd.read_excel(io.BytesIO(content), dtype=object, header=None, nrows=5002)
+            if frame.empty: raise ValueError("empty workbook")
+            header = frame.iloc[0].tolist()
+            frame = frame.iloc[1:].reset_index(drop=True)
+            frame.columns = header
+        else:
+            raise ValueError("unsupported extension")
+        if frame.empty or len(frame) > 5000 or len(frame.columns) > 200: raise ValueError("size")
+        names = [str(column).strip() if pd.notna(column) else "" for column in frame.columns]
+        names = [name or f"未命名列_{index + 1}" for index, name in enumerate(names)]
+        if len(set(names)) != len(names):
+            raise AppException("DATA_DUPLICATE_COLUMNS", "列名去除首尾空格后重复，请修改表头后上传", 400)
+        frame.columns = names
+    except AppException:
+        raise
+    except Exception as exc:
+        raise AppException("DATA_FORMAT_UNSUPPORTED", "文件为空、损坏或超出限制（5000 行、200 列；Excel 解压后 40MB）", 400) from exc
     return frame
 
 
@@ -56,11 +91,13 @@ def analyze(rows: list[DataRow], mode: str = "detected", applied_rules: list[Cle
     outlier_total = 0
     for name in names:
         values = [row.values.get(name) for row in rows]; missing = [row.row_id for row in rows if _is_blank(row.values.get(name))]
-        if missing: issues.append(CleaningIssue(issue_type="missing", column=name, row_ids=missing, suggested_actions=["median", "forward_fill", "keep"]))
+
         nonempty = [value for value in values if value not in (None, "")]
         percent = bool(nonempty) and sum(isinstance(value, str) and value.strip().endswith("%") for value in nonempty) >= len(nonempty) / 2
         numeric = pd.to_numeric(pd.Series(nonempty), errors="coerce") if nonempty else pd.Series(dtype=float)
-        inferred = "percent" if percent else "number" if len(nonempty) and numeric.notna().mean() >= 0.8 else "boolean" if nonempty and all(isinstance(x, bool) for x in nonempty) else "string"
+        inferred = "boolean" if nonempty and all(isinstance(x, bool) or str(x).lower() in {"true", "false"} for x in nonempty) else "percent" if percent else "number" if len(nonempty) and numeric.notna().mean() >= 0.8 else "string"
+        if missing: issues.append(CleaningIssue(issue_type="missing", column=name, row_ids=missing, suggested_actions=(["median", "forward_fill", "keep"] if inferred == "number" else ["forward_fill", "keep"])))
+        if percent: issues.append(CleaningIssue(issue_type="type_conversion", column=name, row_ids=[row.row_id for row in rows if isinstance(row.values.get(name), str) and row.values[name].strip().endswith("%")], suggested_actions=["convert_percent", "keep"]))
         outliers: list[str] = []
         if inferred == "number" and numeric.notna().sum() >= 4:
             q1, q3 = numeric.quantile([0.25, 0.75]); iqr = q3 - q1; low, high = q1 - 1.5 * iqr, q3 + 1.5 * iqr
@@ -72,10 +109,14 @@ def analyze(rows: list[DataRow], mode: str = "detected", applied_rules: list[Cle
     return columns, CleaningReport(mode=mode, issues=issues, applied_rules=applied_rules or [], outliers_detected=outlier_total)
 
 
-def apply_rules(source: list[DataRow], rules: list[CleaningRule], mode: str = "applied") -> tuple[list[DataRow], list[ColumnInfo], CleaningReport]:
+def apply_rules(source: list[DataRow], rules: list[CleaningRule], mode: str = "applied", source_columns: list[ColumnInfo] | None = None) -> tuple[list[DataRow], list[ColumnInfo], CleaningReport]:
     rows = [row.model_copy(deep=True) for row in source]; removed = filled = converted = 0
-    for rule in rules:
+    # Convert before filling so copied cells have the same storage unit.
+    ordered_rules = sorted(rules, key=lambda rule: 0 if rule.action == "drop_rows" else 1 if rule.action in {"convert_number", "convert_percent"} else 2)
+    for rule in ordered_rules:
         targets = set(rule.row_ids)
+        if targets - {row.row_id for row in source} or (rule.column and source and rule.column not in source[0].values):
+            raise AppException("REQUEST_INVALID", "清洗规则包含不存在的行或列", 422)
         if rule.action == "keep": continue
         if rule.action == "drop_rows": before = len(rows); rows = [row for row in rows if row.row_id not in targets]; removed += before - len(rows); continue
         assert rule.column
@@ -96,11 +137,18 @@ def apply_rules(source: list[DataRow], rules: list[CleaningRule], mode: str = "a
                 value = row.values.get(rule.column)
                 if value is None or value == "": continue
                 raw = str(value).strip().replace(",", ""); factor = 0.01 if rule.action == "convert_percent" else 1.0
-                if rule.action == "convert_percent": raw = raw.removesuffix("%")
+                if rule.action == "convert_percent":
+                    if not raw.endswith("%"): continue
+                    raw = raw.removesuffix("%")
                 try:
                     number = float(raw) * factor
                     if not math.isfinite(number): raise ValueError("non-finite number")
                     row.values[rule.column] = number; converted += 1
                 except ValueError: continue
-    columns, report = analyze(rows, mode=mode, applied_rules=rules); report.removed_rows = removed; report.filled_cells = filled; report.type_conversions = converted
+    columns, report = analyze(rows, mode=mode, applied_rules=ordered_rules); report.removed_rows = removed; report.filled_cells = filled; report.type_conversions = converted
+    percent_columns = {rule.column for rule in rules if rule.action == "convert_percent"} | {column.name for column in source_columns or [] if column.display_format == "percent"}
+    for column in columns:
+        if column.name in percent_columns:
+            column.inferred_type = "percent"
+            column.display_format = "percent"
     return rows, columns, report
