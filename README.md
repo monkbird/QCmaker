@@ -6,6 +6,10 @@
 
 ## 核心功能
 
+### 管理控制台
+
+管理入口为 `/admin`，使用独立的管理员账号、Cookie 会话与 CSRF 校验。首次启用、HTTPS 同源代理、密码恢复、令牌轮换及数据备份步骤见 [管理控制台运维说明](docs/admin-console-operations.md)。默认关闭管理入口，设置 `ADMIN_ENABLED=true` 并完成首次账号初始化后使用。管理审计覆盖管理接口，遗留业务入口仍沿用业务访问令牌。
+
 ### 1. 系统配置 (System Configuration)
 - **API 优先策略**：支持配置 OpenAI 兼容的 API Key（如 DeepSeek、Moonshot）或本地 Ollama 模型地址；模型地址变更时需填写对应凭据。
 - **成本控制**：内置 Token 消耗监控与预算保护机制（含预留/结算/超额熔断与一键复位）。
@@ -14,7 +18,7 @@
 ### 安全机制（多层防护）
 - **传输层**：安全响应头（nosniff / DENY / no-referrer / CSP）；CORS 白名单。
 - **限流层**：HTTP 与 WebSocket 分别按可信客户端地址限流；不直接信任请求自带的 X-Forwarded-For。
-- **鉴权层（可选）**：设置 `API_ACCESS_TOKEN` 后，所有 HTTP 接口需携带 `x-api-token` 头、WebSocket 需携带 `?token=`。
+- **业务鉴权层（可选）**：设置 `API_ACCESS_TOKEN` 后，业务 HTTP 接口需携带 `x-api-token` 头、WebSocket 需携带 `?token=`；管理接口独立验证管理员会话。
 - **出站防护层**：模型 API 地址强制 http(s)、禁止内网/元数据地址（SSRF 防护）、禁止携带凭据。
 - **数据脱敏层**：手机号/身份证/邮箱边界感知脱敏，作用于聊天输入/输出及 embedding 文档/查询输入。原文仍保留在本地数据存储中。
 - **资金防护层**：预算预留-结算-对账闭环；未发出请求的预留泄漏自动回收；已发出但费用未知的请求持续占用预算，需对账；供应商超额熔断与管理复位；文档与查询 embedding 均计费入账。

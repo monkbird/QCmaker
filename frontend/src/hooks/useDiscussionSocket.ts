@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { loadDiscussionEvents } from '../storage/db';
 import type { DiscussionCommand, DiscussionEvent } from '../types/discussion';
-type Status = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'finished' | 'failed';
+type Status = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'finished' | 'cancelled' | 'failed';
 function wsUrl() {
     const explicit = import.meta.env.VITE_WS_BASE_URL;
     const token = import.meta.env.VITE_API_TOKEN ? `?token=${encodeURIComponent(String(import.meta.env.VITE_API_TOKEN))}` : '';
@@ -57,10 +57,11 @@ export function useDiscussionSocket(options: Options) {
                 return;
             setEvents(saved);
             lastSeq.current = saved.at(-1)?.event_seq ?? 0;
-            const final = saved.find(event => event.type === 'finished');
+            const final = saved.find(event => event.type === 'finished' || event.type === 'cancelled' || event.session_status === 'cancelled');
             if (final) {
                 terminal.current = true;
-                setStatus('finished');
+                setStatus(final.type === 'cancelled' || final.session_status === 'cancelled' ? 'cancelled' : 'finished');
+                if (final.type === 'cancelled' || final.session_status === 'cancelled') setError('管理员已终止该研讨会话');
                 return;
             }
             if (attempt > 5) {
@@ -126,7 +127,13 @@ export function useDiscussionSocket(options: Options) {
                     if (disposed)
                         return;
                     setEvents(previous => [...previous, parsed]);
-                    if (parsed.type === 'finished' || parsed.session_status === 'finished') {
+                    if (parsed.type === 'cancelled' || parsed.session_status === 'cancelled') {
+                        terminal.current = true;
+                        setStatus('cancelled');
+                        setError('管理员已终止该研讨会话');
+                        ws?.close();
+                    }
+                    else if (parsed.type === 'finished' || parsed.session_status === 'finished') {
                         terminal.current = true;
                         setStatus('finished');
                         ws?.close();
@@ -172,6 +179,8 @@ export function useDiscussionSocket(options: Options) {
         } };
     }, [options.enabled, attempt]);
     const transmit = (command: DiscussionCommand) => {
+        if (terminal.current)
+            return false;
         if (socket.current?.readyState !== WebSocket.OPEN)
             return false;
         socket.current.send(JSON.stringify(command));
@@ -185,6 +194,8 @@ export function useDiscussionSocket(options: Options) {
         return sent;
     };
     const retry = () => {
+        if (terminal.current)
+            return;
         recoveryRequested.current = needsRecovery.current;
         if (needsRecovery.current && transmit({ type: 'recover', session_id: activeSession.current, client_message_id: crypto.randomUUID() })) {
             recoveryRequested.current = false;

@@ -80,7 +80,7 @@ def accept_command(command: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]
             db.execute("INSERT INTO discussion_sessions VALUES(?,?,?,?,?,?,?,?)", (session_id, "created", json.dumps(state, ensure_ascii=False), 1, None, 0, None, (datetime.now(UTC) + timedelta(hours=24)).isoformat()))
         elif kind == "start" and session: raise AppException("WS_PROTOCOL_ERROR", "session_id 已存在，请使用 resume 或 recover", 400)
         elif not session: raise AppException("SESSION_NOT_FOUND", "研讨会话不存在", 404)
-        elif session["status"] == "finished" and kind in {"message", "finish"}: raise AppException("WS_PROTOCOL_ERROR", "当前会话已经结束", 400)
+        elif session["status"] in {"finished", "cancelled"} and kind in {"message", "finish", "recover"}: raise AppException("WS_PROTOCOL_ERROR", "当前会话已经结束", 400)
         if session and session["status"] in {"round_error", "error"} and kind in {"message", "finish"}:
             raise AppException("WS_PROTOCOL_ERROR", "请先恢复失败轮次", 400)
         if kind == "resume":
@@ -112,7 +112,7 @@ async def _acquire_lease(session_id: str, client_id: str) -> tuple[str, int] | N
             claim = db.execute("SELECT status FROM discussion_commands WHERE session_id=? AND client_message_id=?", (session_id, client_id)).fetchone()
             if not claim or claim["status"] not in {"pending", "running"}: return None
             terminal = db.execute("SELECT status FROM discussion_sessions WHERE session_id=?", (session_id,)).fetchone()
-            if terminal and terminal["status"] == "finished":
+            if terminal and terminal["status"] in {"finished", "cancelled"}:
                 db.execute("UPDATE discussion_commands SET status='completed',completed_at=? WHERE session_id=? AND client_message_id=?", (_now(), session_id, client_id))
                 return None
             row = db.execute("SELECT lease_owner,lease_generation,lease_until FROM discussion_sessions WHERE session_id=?", (session_id,)).fetchone()
@@ -141,6 +141,47 @@ def pending_commands(session_id: str) -> list[dict[str, Any]]:
     try: rows = db.execute("SELECT payload_json FROM discussion_commands WHERE session_id=? AND status IN ('pending','running') ORDER BY rowid", (session_id,)).fetchall()
     finally: db.close()
     return [json.loads(row[0]) for row in rows if json.loads(row[0]).get("type") in RUNNABLE_COMMANDS]
+
+
+def admin_cancel(db, session_id: str) -> dict[str, Any]:
+    """Caller owns the immediate transaction and its audit record."""
+    row = db.execute("SELECT status FROM discussion_sessions WHERE session_id=?", (session_id,)).fetchone()
+    if not row:
+        raise AppException("SESSION_NOT_FOUND", "研讨会话不存在", 404)
+    if row["status"] in {"finished", "cancelled"}:
+        raise AppException("SESSION_TERMINAL", "会话已结束", 409)
+    db.execute("UPDATE discussion_sessions SET status='cancelled',lease_generation=lease_generation+1,lease_owner=NULL,lease_until=NULL WHERE session_id=?", (session_id,))
+    count = db.execute("UPDATE discussion_commands SET status='cancelled',completed_at=? WHERE session_id=? AND status IN ('pending','running','failed')", (_now(), session_id)).rowcount
+    _event(db, session_id, None, "cancelled", {"session_status": "cancelled", "reason": "admin_cancelled"})
+    return {"session_id": session_id, "status": "cancelled", "cancelled_commands": count, "inflight_cost_preserved": True}
+
+
+def admin_recover(db, session_id: str) -> list[dict[str, Any]]:
+    row = db.execute("SELECT status,lease_until FROM discussion_sessions WHERE session_id=?", (session_id,)).fetchone()
+    if not row:
+        raise AppException("SESSION_NOT_FOUND", "研讨会话不存在", 404)
+    if row["status"] in {"finished", "cancelled"}:
+        raise AppException("SESSION_TERMINAL", "会话已结束", 409)
+    if row["lease_until"] and datetime.fromisoformat(row["lease_until"]) > datetime.now(UTC):
+        raise AppException("SESSION_IN_USE", "执行租约尚未过期", 409)
+    rows = db.execute("SELECT payload_json FROM discussion_commands WHERE session_id=? AND status IN ('pending','running','failed') ORDER BY rowid", (session_id,)).fetchall()
+    commands = [json.loads(row[0]) for row in rows if json.loads(row[0]).get("type") in RUNNABLE_COMMANDS]
+    if not commands:
+        raise AppException("SESSION_NOT_RECOVERABLE", "会话没有可恢复的命令", 409)
+    db.execute("UPDATE discussion_sessions SET status='round_done',lease_generation=lease_generation+1,lease_owner=NULL,lease_until=NULL WHERE session_id=?", (session_id,))
+    for command in commands:
+        db.execute("UPDATE discussion_commands SET status='pending',picked_at=NULL,completed_at=NULL,error_json=NULL WHERE session_id=? AND client_message_id=?", (session_id, command["client_message_id"]))
+    _event(db, session_id, None, "recovery_requested", {"session_status": "round_done", "queued_commands": len(commands)})
+    return commands
+
+
+async def run_admin_recovery(commands: list[dict[str, Any]]) -> None:
+    for command in commands:
+        await execute(command)
+        with transaction() as db:
+            row = db.execute("SELECT status FROM discussion_commands WHERE session_id=? AND client_message_id=?", (command['session_id'], command['client_message_id'])).fetchone()
+        if not row or row['status'] != 'completed':
+            raise AppException('RECOVERY_INCOMPLETE', '恢复命令未完成，请查看会话状态与事件', 409)
 
 
 async def _route_roles(context: str, start: bool) -> list[str]:
@@ -193,6 +234,7 @@ async def _execute_locked(command: dict[str, Any], session_id: str, client_id: s
         completed_roles = set(persisted_command.get("_completed_roles", []))
 
         def persist_meta(tx, *, include_state: bool = True) -> None:
+            _guard_lease(tx, session_id, *lease)
             if include_state: tx.execute("UPDATE discussion_sessions SET state_json=? WHERE session_id=?", (json.dumps(state, ensure_ascii=False), session_id))
             tx.execute("UPDATE discussion_commands SET payload_json=? WHERE session_id=? AND client_message_id=?", (json.dumps(persisted_command, ensure_ascii=False), session_id, client_id))
 
@@ -226,7 +268,9 @@ async def _execute_locked(command: dict[str, Any], session_id: str, client_id: s
             async def run_role(role_name: str) -> None:
                 nonlocal context
                 if role_name in completed_roles: return
+                with transaction() as tx: _guard_lease(tx, session_id, *lease)
                 role_context = context + (await _research_context(state["topic"], state["project_id"]) if role_name == "researcher" else "")
+                with transaction() as tx: _guard_lease(tx, session_id, *lease)
                 content = await chat([{"role": "system", "content": ROLE_PROMPTS[role_name]}, {"role": "user", "content": role_context}], role=role_name); state["history"].append({"agent": role_name, "content": content}); context += f"\n{role_name}: {content}"
                 completed_roles.add(role_name); persisted_command["_completed_roles"] = list(completed_roles)
                 with transaction(immediate=True) as tx:
@@ -236,6 +280,7 @@ async def _execute_locked(command: dict[str, Any], session_id: str, client_id: s
             if not persisted_command.get("_round_counted"):
                 state["round"] += 1; persisted_command["_round_counted"] = True
             if kind == "finish":
+                with transaction() as tx: _guard_lease(tx, session_id, *lease)
                 prompt = f"请把以下QC研讨整理为严格JSON，字段为 problem(string), root_causes(string[]), countermeasures(string[]), summary(string)。不要Markdown。\n{context}"
                 raw = await chat([{"role": "system", "content": ROLE_PROMPTS["writer"] + "只输出合法JSON。"}, {"role": "user", "content": prompt}], role="writer")
                 try:

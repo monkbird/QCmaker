@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark"><meta name="referrer" content="no-referrer">
+  <title>QCmaker · 管理后台交互预览</title>
+  <link rel="stylesheet" href="preview.css">
+</head>
+<body>
+  <div class="ambient" aria-hidden="true"><div class="sphere"></div><div class="orbit one"></div><div class="orbit two"></div></div>
+  <div class="preview-bar"><span><i class="preview-dot"></i>QCMAKER <b>DESIGN PREVIEW / 01</b><em>交互预览 · 全部为演示数据</em></span><div><button id="reset-demo">重置演示</button><button id="reference">设计参考 ↗</button></div></div>
+  <div class="workspace" id="workspace">
+    <aside class="sidebar glass" aria-label="主导航">
+      <div class="window-bar"><span>ADMIN CONSOLE</span><button class="optical" id="collapse" aria-label="收起侧栏" aria-expanded="true"></button></div>
+      <div class="identity"><div class="avatar"><span>Q</span><i></i></div><div class="identity-copy"><small>欢迎回来，</small><strong>Admin<span>管理员</span></strong></div></div>
+      <label class="nav-search" id="search-shell"><span id="search-icon"></span><input id="nav-search" placeholder="搜索功能…" aria-label="搜索功能"><kbd>⌘ K</kbd></label>
+      <nav id="navigation"></nav><p class="nav-empty" hidden>未找到相关功能</p>
+      <div class="sidebar-bottom"><div class="connection"><span class="status-dot"></span><span>所有系统正常</span><small>本地环境</small></div><button class="profile-button" data-page="security"><span class="mini-avatar">A</span><span>管理会话<small>演示会话 · 28:46</small></span><span class="profile-chevron">›</span></button></div>
+    </aside>
+    <main class="main glass">
+      <header class="topbar"><div class="breadcrumb"><button id="mobile-nav" aria-label="打开导航">☰</button><span class="brand-mark">Q<span>✦</span></span><span>QCmaker</span><i>/</i><span id="breadcrumb">总览看板</span></div><div class="top-actions"><span class="env-tag"><i></i>本地工作空间</span><button class="icon-button" id="notifications" aria-label="查看通知"></button><button class="top-avatar" data-page="security" aria-label="查看管理员会话">A</button></div></header>
+      <div id="page" tabindex="-1"></div>
+      <footer class="app-footer"><span><i class="status-dot"></i>仅展示交互与视觉效果，不连接业务服务</span><span>QCmaker Admin · Preview 01</span></footer>
+    </main>
+  </div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <dialog id="modal" aria-labelledby="modal-title"><div id="modal-content"></div></dialog>
+  <dialog id="drawer" aria-labelledby="drawer-title"><div id="drawer-content"></div></dialog>
+  <script src="preview.js"></script>
+</body>
+</html>

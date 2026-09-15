@@ -146,5 +146,74 @@ class RAGService:
         return [client.get_collection(getattr(item, 'name', item)) for item in client.list_collections()
                 if str(getattr(item, 'name', item)).startswith('qc_')]
 
+    def _admin_collections(self):
+        """Metadata administration never initializes a model or migrates vectors."""
+        from pathlib import Path
+        if not Path(self.persist_directory).exists():
+            return []
+        import chromadb
+        client = chromadb.PersistentClient(path=self.persist_directory)
+        return [client.get_collection(getattr(item, 'name', item), embedding_function=None)
+                for item in client.list_collections()
+                if str(getattr(item, 'name', item)).startswith('qc_')]
+
+    async def admin_projects(self):
+        def collect():
+            with self._lock:
+                projects = {}
+                for collection in self._admin_collections():
+                    for offset in range(0, collection.count(), 500):
+                        rows = collection.get(limit=500, offset=offset, include=['metadatas'])
+                        for metadata in rows['metadatas']:
+                            metadata = metadata or {}
+                            project_id = metadata.get('project_id') or '__legacy_unassigned__'
+                            item = projects.setdefault(project_id, {'project_id': project_id, 'chunks': 0, '_documents': set()})
+                            item['chunks'] += 1
+                            item['_documents'].add(metadata.get('document_id') or '__unassigned__')
+                return [{**{k: v for k, v in item.items() if k != '_documents'}, 'documents': len(item['_documents'])} for item in projects.values()]
+        return await asyncio.to_thread(collect)
+
+    async def admin_documents(self, project_id: str):
+        def collect():
+            with self._lock:
+                documents = {}
+                for collection in self._admin_collections():
+                    offset = 0
+                    while True:
+                        rows = collection.get(where={'project_id': project_id}, limit=500, offset=offset, include=['metadatas'])
+                        for metadata in rows['metadatas']:
+                            metadata = metadata or {}
+                            doc_id = metadata.get('document_id') or '__unassigned__'
+                            item = documents.setdefault(doc_id, {'document_id': doc_id, 'filename': metadata.get('source', ''), 'chunks': 0})
+                            item['chunks'] += 1
+                        if len(rows['ids']) < 500:
+                            break
+                        offset += 500
+                return list(documents.values())
+        return await asyncio.to_thread(collect)
+
+    async def admin_delete(self, project_id: str, document_id: str | None = None):
+        from backend.app.core.errors import AppException
+        if not project_id or project_id == '__legacy_unassigned__':
+            raise AppException('PROJECT_SCOPE_INVALID', '未归属资料不能按项目批量删除', 400)
+        def delete():
+            with self._lock:
+                deleted = 0
+                failed = []
+                where = {'$and': [{'project_id': project_id}, {'document_id': document_id}]} if document_id else {'project_id': project_id}
+                for collection in self._admin_collections():
+                    try:
+                        while True:
+                            rows = collection.get(where=where, limit=500, include=['metadatas'])
+                            if not rows['ids']:
+                                break
+                            collection.delete(ids=rows['ids'])
+                            deleted += len(rows['ids'])
+                    except Exception:
+                        logger.exception('administrative vector delete failed')
+                        failed.append(collection.name)
+                return {'deleted_chunks': deleted, 'failed_collections': failed, 'status': 'partial' if failed else 'succeeded'}
+        return await asyncio.to_thread(delete)
+
 
 rag_service = RAGService()

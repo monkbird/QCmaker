@@ -53,13 +53,19 @@ _lock = threading.RLock()
 settings = Settings(_env_file=ENV_PATH)
 
 
-def update_settings(values: dict[str, Any]) -> Settings:
+def update_settings(values: dict[str, Any], expected_revision: int | None = None) -> Settings:
     global settings
     allowed_fields = set(Settings.model_fields)
     unknown = sorted(set(values) - allowed_fields)
     if unknown:
         raise ValueError(f"未知的配置项: {', '.join(unknown)}")
     with _lock:
+        if expected_revision is not None:
+            from backend.app.core.errors import AppException
+            if expected_revision != settings.CONFIG_REVISION:
+                raise AppException("CONFIG_REVISION_CONFLICT", "配置已更新，请刷新后重试", 409)
+            if any(key in os.environ for key in values):
+                raise AppException("CONFIG_ENV_OVERRIDE", "环境变量覆盖的配置只能在部署环境中修改", 409)
         current = {key: value for key, value in settings.model_dump().items() if value is not None}
         if ENV_PATH.exists():
             current.update({key: value for key, value in dotenv_values(ENV_PATH).items() if value is not None})
@@ -67,19 +73,27 @@ def update_settings(values: dict[str, Any]) -> Settings:
             if value is not None and not (key.endswith("_KEY") and value == ""):
                 current[key] = "true" if value is True else "false" if value is False else str(value).replace("\r", "")
         current["CONFIG_REVISION"] = str(settings.CONFIG_REVISION + 1)
+        # Validate the complete candidate before changing the file or live settings.
+        # Reject line breaks instead of silently changing a credential's value.
+        if any("\n" in str(value) or "\r" in str(value) for value in values.values()):
+            raise ValueError("配置值不能包含换行符")
+        candidate = Settings(_env_file=None, **current)
         ENV_PATH.parent.mkdir(parents=True, exist_ok=True)
         fd, temp_name = tempfile.mkstemp(prefix=".env.", dir=ENV_PATH.parent, text=True)
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
                 for key in sorted(current):
                     if current[key] is not None:
-                        stream.write(f"{key}={str(current[key]).replace(chr(10), '')}\n")
+                        escaped = str(current[key]).replace("\\", "\\\\").replace("'", "\\'")
+                        stream.write(f"{key}='{escaped}'\n")
+                stream.flush()
+                os.fsync(stream.fileno())
             os.replace(temp_name, ENV_PATH)
             logger.info("config updated keys=%s revision=%s", ",".join(sorted(values)), current["CONFIG_REVISION"])
         finally:
             if os.path.exists(temp_name):
                 os.unlink(temp_name)
-        settings = Settings(_env_file=ENV_PATH)
+        settings = candidate
         return settings
 
 

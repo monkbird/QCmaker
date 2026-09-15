@@ -8,10 +8,14 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api.endpoints import config, data, discussion, ppt, rag, search, topic, visualization
+from backend.app.api.endpoints.admin import auth as admin_auth
+from backend.app.api.endpoints.admin import data as admin_data
+from backend.app.core.admin_security import init_admin
 from backend.app.core.config import PROJECT_ROOT, get_settings
 from backend.app.core.errors import install_error_handlers
 from backend.app.core.security import RateLimitMiddleware, SecurityHeadersMiddleware, rebuild_rate_limiter
 from backend.app.repositories.database import init_database
+from backend.app.services.events import monitor_local_events
 from backend.app.services.maintenance import run_cleanup_once, start_periodic_cleanup, stop_periodic_cleanup
 
 
@@ -23,13 +27,19 @@ def configure_logging() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    configure_logging(); init_database()
+    configure_logging(); init_database(); init_admin()
+    await admin_data.startup_admin_recovery()
     stats = await asyncio.to_thread(run_cleanup_once)
     logging.getLogger(__name__).info("startup cleanup: %s", stats)
     cleanup_task = start_periodic_cleanup()
+    event_task = asyncio.create_task(monitor_local_events())
     rebuild_rate_limiter()
-    yield
-    await stop_periodic_cleanup(cleanup_task)
+    try:
+        yield
+    finally:
+        await admin_data.shutdown_admin_recovery_workers()
+        await stop_periodic_cleanup(cleanup_task)
+        await stop_periodic_cleanup(event_task)
 
 app = FastAPI(
     title="Smart QC-Circle Generator API",
@@ -57,6 +67,8 @@ app.include_router(search.router, prefix="/api/search", tags=["search"])
 app.include_router(discussion.router, prefix="/api/discussion", tags=["discussion"])
 app.include_router(visualization.router, prefix="/api/visualization", tags=["visualization"])
 app.include_router(ppt.router, prefix="/api/ppt", tags=["ppt"])
+app.include_router(admin_auth.router, prefix="/api/admin", tags=["admin-auth"])
+app.include_router(admin_data.router, prefix="/api/admin", tags=["admin"])
 install_error_handlers(app)
 
 @app.get("/")

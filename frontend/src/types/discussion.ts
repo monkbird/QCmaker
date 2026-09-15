@@ -12,7 +12,7 @@ export interface DiscussionCommand {
     content?: string;
 }
 export interface DiscussionEvent {
-    type: 'ack' | 'agent_message' | 'round_done' | 'finished' | 'error';
+    type: 'ack' | 'agent_message' | 'round_done' | 'finished' | 'cancelled' | 'error';
     session_id: string;
     event_seq: number;
     timestamp: string;

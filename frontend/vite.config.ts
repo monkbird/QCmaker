@@ -6,7 +6,7 @@ export default defineConfig(({ command, mode }) => {
   if (command === 'serve' && mode === 'development' && !env.VITE_DEV_API_TARGET) throw new Error('请在环境文件中配置 VITE_DEV_API_TARGET')
   return {
     plugins: [react()],
-    server: env.VITE_DEV_API_TARGET ? { proxy: { '/api': { target: env.VITE_DEV_API_TARGET, changeOrigin: true, ws: true } } } : undefined,
+    server: env.VITE_DEV_API_TARGET ? { proxy: { '/api': { target: env.VITE_DEV_API_TARGET, changeOrigin: false, ws: true } } } : undefined,
     build: {
       rollupOptions: {
         output: {

@@ -106,3 +106,17 @@ it('recovers after reconnect when retry was requested offline', async () => {
   await waitFor(() => expect(next.sent.at(-1)?.type).toBe('recover'))
   expect(result.current.status).toBe('connected')
 })
+
+it('stops reconnecting and sending commands after an administrator cancellation', async () => {
+  const { result } = renderHook(() => useDiscussionSocket(options()))
+  const ws = await socket()
+  await act(async () => ws.onopen?.())
+  const instanceCount = FakeSocket.instances.length
+  act(() => ws.event({ type: 'cancelled', event_seq: 1, session_status: 'cancelled' }))
+  await waitFor(() => expect(result.current.status).toBe('cancelled'))
+  expect(result.current.error).toBe('管理员已终止该研讨会话')
+  expect(ws.readyState).toBe(3)
+  expect(result.current.sendMessage('不要再发送')).toBe(false)
+  act(() => result.current.retry())
+  expect(FakeSocket.instances).toHaveLength(instanceCount)
+})

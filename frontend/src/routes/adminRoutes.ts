@@ -1,0 +1,15 @@
+export const adminRoutePaths = [
+  '/admin/login',
+  '/admin/overview',
+  '/admin/usage',
+  '/admin/budget',
+  '/admin/datasets',
+  '/admin/discussions',
+  '/admin/files',
+  '/admin/rag',
+  '/admin/logs',
+  '/admin/system',
+  '/admin/security',
+  '/admin/config',
+  '/admin/audit',
+] as const

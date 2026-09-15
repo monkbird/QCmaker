@@ -78,7 +78,7 @@ EXEMPT_PATHS = {"/", "/api/health"}
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        if request.url.path in EXEMPT_PATHS or request.method == "OPTIONS":
+        if request.url.path in EXEMPT_PATHS or request.url.path == "/api/admin" or request.url.path.startswith("/api/admin/") or request.method == "OPTIONS":
             return await call_next(request)
         allowed = await _limiter.check(_client_ip(request))
         if not allowed:

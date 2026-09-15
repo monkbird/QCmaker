@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1100" viewBox="0 0 1600 1100">
+  <defs>
+    <radialGradient id="orb" cx="65%" cy="16%" r="91%">
+      <stop stop-color="#00c5ed"/>
+      <stop offset=".29" stop-color="#0879fa"/>
+      <stop offset=".60" stop-color="#183fe4"/>
+      <stop offset=".82" stop-color="#625acd"/>
+      <stop offset="1" stop-color="#17234f"/>
+    </radialGradient>
+    <radialGradient id="reflection" cx="40%" cy="18%" r="70%">
+      <stop stop-color="#86d5ff" stop-opacity=".36"/>
+      <stop offset=".54" stop-color="#3181ff" stop-opacity=".03"/>
+      <stop offset="1" stop-color="#071124" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="shade" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#00030b" stop-opacity="0"/>
+      <stop offset=".55" stop-color="#00030b" stop-opacity="0"/>
+      <stop offset="1" stop-color="#00030b" stop-opacity=".8"/>
+    </linearGradient>
+    <filter id="soft"><feGaussianBlur stdDeviation="24"/></filter>
+    <filter id="glow"><feGaussianBlur stdDeviation="65"/></filter>
+  </defs>
+  <rect width="1600" height="1100" fill="#02040a"/>
+  <ellipse cx="915" cy="415" rx="495" ry="625" transform="rotate(-28 915 415)" fill="#092162" opacity=".48" filter="url(#glow)"/>
+  <ellipse cx="865" cy="425" rx="460" ry="620" transform="rotate(-28 865 425)" fill="url(#orb)" filter="url(#soft)"/>
+  <rect width="1600" height="1100" fill="url(#shade)"/>
+</svg>

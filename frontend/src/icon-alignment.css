@@ -1,0 +1,79 @@
+/*
+ * Keep icon primitives optically centered after the glass and neumorphic
+ * surfaces are applied. Ant Design renders icons through an extra span, so
+ * the wrapper and the SVG both need a zero-line-height flex alignment context.
+ *
+ * The SVG selectors stay anchored to icon bases and button icon wrappers;
+ * chart SVGs, ECharts output, and standalone loading indicators are excluded.
+ */
+
+.brand-mark,
+.step-link-icon,
+.icon-action,
+.model-refresh,
+.ppt-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  text-align: center;
+}
+
+.step-link-number {
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  text-align: center;
+}
+
+.ant-btn {
+  align-items: center;
+  justify-content: center;
+}
+
+.ant-btn-icon,
+.ant-btn-icon > .anticon,
+.ant-btn > .ant-btn-icon,
+.ant-btn > .anticon,
+.brand-mark > .anticon,
+.step-link-icon > .anticon,
+.icon-action > .anticon,
+.model-refresh > .anticon,
+.ppt-icon > .anticon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  line-height: 0;
+  vertical-align: middle;
+}
+
+.step-link-number > .anticon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  line-height: 0;
+  vertical-align: middle;
+}
+
+.brand-mark > .anticon > svg,
+.brand-mark > svg,
+.step-link-icon > .anticon > svg,
+.step-link-icon > svg,
+.icon-action > .anticon > svg,
+.icon-action > svg,
+.model-refresh > .anticon > svg,
+.model-refresh > svg,
+.ppt-icon > .anticon > svg,
+.ppt-icon > svg,
+.step-link-number > .anticon > svg,
+.ant-btn-icon > .anticon > svg,
+.ant-btn > .anticon > svg {
+  display: block;
+  width: 1em;
+  height: 1em;
+}
