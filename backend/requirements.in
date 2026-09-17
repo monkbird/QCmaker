@@ -22,3 +22,5 @@ python-dotenv
 tavily-python
 beautifulsoup4
 playwright
+PyMuPDF>=1.28
+rapidocr-onnxruntime>=1.4.4

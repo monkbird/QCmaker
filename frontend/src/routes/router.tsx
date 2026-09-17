@@ -11,6 +11,7 @@ import { AdminSessionProvider } from '../layouts/AdminSessionContext'
 
 const ConfigPage = lazy(() => import('../pages/ConfigPage').then((module) => ({ default: module.ConfigPage })))
 const TopicPage = lazy(() => import('../pages/TopicPage').then((module) => ({ default: module.TopicPage })))
+const AuthoringPage = lazy(() => import('../pages/AuthoringPage').then((module) => ({ default: module.AuthoringPage })))
 const DataPage = lazy(() => import('../pages/DataPage').then((module) => ({ default: module.DataPage })))
 const DiscussionPage = lazy(() => import('../pages/DiscussionPage').then((module) => ({ default: module.DiscussionPage })))
 const VisualizationPage = lazy(() => import('../pages/VisualizationPage').then((module) => ({ default: module.VisualizationPage })))
@@ -37,7 +38,7 @@ function Page({ children }: { children: ReactNode }) {
 function WizardGuard() {
   const { state } = useWizard()
   const location = useLocation()
-  if (state.hydration === 'loading' || state.configStatus === 'checking') return <div className="boot-state"><Spin /><span>正在恢复工作区</span></div>
+  if (state.hydration === 'loading') return <div className="boot-state"><Spin /><span>正在恢复工作区</span></div>
   const target = routeForState(location.pathname, state)
   return target ? <Navigate to={target} replace /> : <Outlet />
 }
@@ -87,6 +88,7 @@ export const router = createBrowserRouter([
       children: [
         { path: '/config', element: <Page><ConfigPage /></Page> },
         { path: '/topic', element: <Page><TopicPage /></Page> },
+        { path: '/authoring', element: <Page><AuthoringPage /></Page> },
         { path: '/data', element: <Page><DataPage /></Page> },
         { path: '/discussion', element: <Page><DiscussionPage /></Page> },
         { path: '/visualization', element: <Page><VisualizationPage /></Page> },

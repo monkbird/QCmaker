@@ -7,5 +7,6 @@ dist/
 .DS_Store
 backend/data/*.sqlite3*
 backend/data/chroma_db/
+backend/data/materials/
 backend/generated_ppts/*.pptx
 backend/logs/*.log

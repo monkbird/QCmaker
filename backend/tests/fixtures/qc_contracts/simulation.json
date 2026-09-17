@@ -1,0 +1,1 @@
+{"metric_id":"yield-sim","name":"候选产量","unit":"kg/亩","subject":"模拟情景","comparison":"基线","sampling_method":"scenario","time_range":"xx","value_kind":"simulated","refs":[{"source_kind":"simulation","source_id":"sim-1","source_version":1,"locator":"情景假设","origin_kind":"simulation"}]}

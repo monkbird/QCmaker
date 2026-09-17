@@ -1,0 +1,21 @@
+import { api } from './client';
+import type { ChapterSnapshot, ScenarioCard, ReviewState, EvidenceState, ContentBlock, MetricSpec } from '../types/authoring';
+const root=(projectId:string)=>`/projects/${encodeURIComponent(projectId)}`;
+export const getAuthoringContext = async (projectId:string) => (await api.get<ScenarioCard>(`${root(projectId)}/context`)).data;
+export const listEvidence = async (projectId:string) => (await api.get<{refs:import('../types/authoring').EvidenceRef[]}>(`${root(projectId)}/evidence`)).data;
+export const recommendEvidence = async (projectId:string,chapterId:string) => (await api.get<{suggestions:{ref:import('../types/authoring').EvidenceRef;reason:string;supports:string;cannot_support:string}[]}>(`${root(projectId)}/chapters/${encodeURIComponent(chapterId)}/recommendations`)).data;
+export const saveAuthoringContext = async (projectId:string, context:ScenarioCard, expectedRevision:number) => (await api.put<ScenarioCard>(`${root(projectId)}/context`, context, { params:{ expected_revision: expectedRevision } })).data;
+export const listChapters = async (projectId:string) => (await api.get<{chapters:ChapterSnapshot[];path:{chapter_id:string;slug:string;title:string;purpose:string}[]}>(`${root(projectId)}/chapters`)).data;
+export const saveChapter = async (projectId:string, chapterId:string, expectedRevision:number, content_blocks:ContentBlock[], metrics:MetricSpec[] = [], evidence_refs:import('../types/authoring').EvidenceRef[] = [], content_state:'draft'|'complete' = 'draft') => (await api.put<ChapterSnapshot>(`${root(projectId)}/chapters/${encodeURIComponent(chapterId)}`, {expected_revision:expectedRevision,content_blocks,metrics,evidence_refs,content_state})).data;
+export const getChapter = async (projectId:string, chapterId:string, revision?:number) => (await api.get<ChapterSnapshot>(`${root(projectId)}/chapters/${encodeURIComponent(chapterId)}/snapshot`, {params:{revision}})).data;
+export const generateChapter = async (projectId:string, chapterId:string, expectedRevision:number, operationId:string, evidence_refs:import('../types/authoring').EvidenceRef[] = []) => (await api.post<ChapterSnapshot>(`${root(projectId)}/chapters/${encodeURIComponent(chapterId)}/generate`, {expected_revision:expectedRevision,operation_id:operationId,evidence_refs})).data;
+export const chapterHistory = async (projectId:string, chapterId:string) => (await api.get<{snapshots:ChapterSnapshot[]}>(`${root(projectId)}/chapters/${encodeURIComponent(chapterId)}/history`)).data;
+export const previewChange = async (projectId:string, expected_revision:number, context:ScenarioCard) => {
+ const result=(await api.post<{preview_id:string;affected_chapters:{chapter_id:string;revision:number}[]}>(`${root(projectId)}/changes/preview`,{expected_revision,context})).data;
+ return {...result,affected_chapters:result.affected_chapters.map(item=>item.chapter_id)};
+};
+export const applyChange = async (projectId:string, payload:object) => (await api.post(`${root(projectId)}/changes/apply`,payload)).data;
+export const listActivities = async (projectId:string) => (await api.get(`${root(projectId)}/activities`)).data as {activities:unknown[]};
+export const checkTimeline = async (projectId:string) => (await api.get(`${root(projectId)}/timeline/check`)).data as {warnings:string[];flags:string[]};
+export const reviewChapter = async (projectId:string, chapterId:string, review_state:ReviewState, reviewer_id:string, note:string, expected_revision?:number) => (await api.post<ChapterSnapshot>(`${root(projectId)}/chapters/${encodeURIComponent(chapterId)}/review`, {review_state,reviewer_id,note,expected_revision})).data;
+export const verifyChapterEvidence = async (projectId:string, chapterId:string, evidence_state:EvidenceState, reviewer_id:string, gaps:string[], expected_revision?:number, basis:import('../types/authoring').EvidenceRef[] = []) => (await api.post<ChapterSnapshot>(`${root(projectId)}/chapters/${encodeURIComponent(chapterId)}/evidence-verification`, {evidence_state,reviewer_id,gaps,expected_revision,basis})).data;

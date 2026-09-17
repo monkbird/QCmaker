@@ -1,5 +1,6 @@
 import json
 import logging
+from backend.app.services.qc_coaching import ROLE_BOUNDARIES
 from collections import Counter
 
 import pandas as pd
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(verify_access_token)])
 
-ADVISOR_PROMPT = """你是QC图表顾问。根据数据画像选择最能支撑论证的图表，并给出业务解读。
+ADVISOR_PROMPT = ROLE_BOUNDARIES["chart"] + "\n" + """你是QC图表顾问。根据数据画像选择最能支撑论证的图表，并给出业务解读。
 只输出合法 JSON：{"chart_type":"bar|line|pie","x_axis":"分类列名","y_axis":"数值列名","aggregation":"none|sum|mean|count","reason":"选型理由","insight":"基于统计分布的业务解读（150字内）","caveats":["注意事项"]}。
 约束：x_axis 必须来自分类列、y_axis 必须来自数值列；时间/顺序类分类优先 line。不要 Markdown。"""
 

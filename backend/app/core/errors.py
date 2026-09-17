@@ -38,7 +38,9 @@ def install_error_handlers(app: FastAPI) -> None:
             # Pydantic's input/ctx can contain passwords or whole request bodies.
             errors = [{"loc": list(item['loc']), "type": item['type']} for item in exc.errors()]
             return JSONResponse(content=error_payload(request, "REQUEST_INVALID", "请求参数不合法", {"errors": errors}), status_code=422)
-        return JSONResponse(content=error_payload(request, "REQUEST_INVALID", "请求参数不合法", {"errors": jsonable_encoder(exc.errors(), custom_encoder={ValueError: str})}), status_code=422)
+        # Validation input may contain draft API keys or sensitive material text.
+        errors = [{"loc": list(item['loc']), "type": item['type']} for item in exc.errors()]
+        return JSONResponse(content=error_payload(request, "REQUEST_INVALID", "请求参数不合法", {"errors": errors}), status_code=422)
 
     @app.exception_handler(Exception)
     async def unhandled_handler(request: Request, exc: Exception) -> JSONResponse:

@@ -7,8 +7,9 @@ import { adviseCleaning } from '../api/insight';
 import { errorMessage } from '../api/client';
 import { StepPage } from '../components/StepPage';
 import { useWizard } from '../context/WizardContext';
-import { loadDataset } from '../storage/db';
+import { loadDataset, listProjectDatasets, type StoredDataset } from '../storage/db';
 import type { CleaningAction, CleaningAdviceResponse, CleaningApplyRequest, CleaningIssue, CleaningRule, DatasetResponse } from '../types/api';
+import { MaterialWorkspace } from '../components/materials/MaterialWorkspace';
 const actionLabel: Record<CleaningAction, string> = { keep: '保留', drop_rows: '删除行', median: '中位数填补', forward_fill: '向下填充', convert_number: '转数值', convert_percent: '转百分比' };
 const issueLabel: Record<CleaningIssue['issue_type'], string> = { empty_row: '空行', total_row: '合计行', missing: '缺失值', outlier: '异常值', type_conversion: '类型转换' };
 function defaultAction(issue: CleaningIssue): CleaningAction {
@@ -22,6 +23,8 @@ interface Preview {
 export function DataPage() {
     const { state, storeDataset, confirmDataset } = useWizard();
     const [dataset, setDataset] = useState<DatasetResponse | null>(null);
+    const [datasets,setDatasets] = useState<StoredDataset[]>([]);
+    useEffect(()=>{let active=true;void listProjectDatasets(state.currentProjectId).then(items=>{if(active)setDatasets(items)});return()=>{active=false}},[state.currentProjectId,state.dataRef,state.datasetRevision]);
     const [file, setFile] = useState<File | null>(null);
     const [selected, setSelected] = useState<number[]>([]);
     const [overrides, setOverrides] = useState<Record<number, CleaningAction>>({});
@@ -109,7 +112,7 @@ export function DataPage() {
             return;
         await confirmData(dataset.dataset_id, dataset.revision);
         await confirmDataset();
-        navigate('/discussion');
+        message.success('数据已确认，可用于图表或研讨');
     });
     const askAdvice = () => run(async () => {
         if (!dataset)
@@ -134,12 +137,15 @@ export function DataPage() {
         },
     })) ?? [];
     const displayed = activePreview?.rows ?? dataset?.rows ?? [];
-    return <StepPage wide eyebrow="03 · VERIFY" title="检测与确认数据" description="先预览规则影响，再应用并确认；可以翻页检查全部数据。" aside={dataset && <Space><Tag>版本 {dataset.revision}</Tag><Tag color={state.dataConfirmed ? 'success' : 'processing'}>{state.dataConfirmed ? '已确认' : '待确认'}</Tag></Space>} actions={<>
+    return <StepPage wide eyebrow="TOOLS · MATERIALS" title="资料与数据" description="参考资料和表格可随时补充；确认表格数据后可用于图表与研讨。" aside={dataset && <Space><Tag>版本 {dataset.revision}</Tag><Tag color={state.dataConfirmed ? 'success' : 'processing'}>{state.dataConfirmed ? '已确认' : '待确认'}</Tag></Space>} actions={<>
+      <Button onClick={() => navigate('/authoring')}>返回逐章编写</Button><Button disabled={!state.dataConfirmed} onClick={() => navigate('/discussion')}>数据研讨</Button>
       <Button icon={<RollbackOutlined />} disabled={busy || !dataset || dataset.revision === 0} onClick={() => void undo()}>恢复原始数据</Button>
       <Button icon={<RobotOutlined />} disabled={busy || !dataset} onClick={() => void askAdvice()}>AI 清洗建议</Button>
       {activePreview ? <><Button disabled={busy} onClick={() => setPreview(null)}>取消预览</Button><Button icon={<ExperimentOutlined />} disabled={busy} onClick={() => void apply()}>应用预览规则</Button></> : <Button icon={<ExperimentOutlined />} disabled={busy || !rules.length} onClick={() => void doPreview()}>预览影响</Button>}
       <Button type="primary" icon={<CheckOutlined />} disabled={busy || !dataset || !!activePreview || dataset.rows.length === 0} onClick={() => void confirm()}>确认数据</Button>
     </>}>
+    <MaterialWorkspace projectId={state.currentProjectId} />
+    {!!datasets.length && <Select aria-label="当前项目数据集" style={{width:'100%',marginBottom:16}} value={state.dataRef} options={datasets.map(item=>({value:item.dataRef,label:`${item.filename} · v${item.revision}`}))} onChange={ref=>void run(async()=>{const item=datasets.find(x=>x.dataRef===ref);if(!item)return;const response=await import('../api/data').then(m=>m.getDataset(item.dataset_id));await storeDataset(response,new File([item.sourceFile],item.filename),ref);clearDerived()})}/>}
     {!dataset ? <label className="upload-zone"><input type="file" aria-label="选择数据文件" accept=".csv,.xls,.xlsx" hidden disabled={busy} onChange={e => { const next = e.target.files?.[0]; if (next)
             void upload(next); e.target.value = ''; }}/><CloudUploadOutlined /><b>{busy ? '正在检测…' : '选择数据文件'}</b><span>CSV / XLS / XLSX · 最大 10MB · 5000 行</span></label> : <div className="data-layout">
       <Card className="issue-panel" title={`检测项 · ${dataset.report.issues.length}`} extra={<label className="replace-file"><input hidden aria-label="替换数据文件" type="file" accept=".csv,.xls,.xlsx" disabled={busy} onChange={e => { const next = e.target.files?.[0]; if (next)

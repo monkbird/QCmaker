@@ -56,14 +56,35 @@ interface QCDb extends DBSchema {
         };
     };
 }
-const database = openDB<QCDb>('qcmaker', 1, { upgrade(db) {
+const database = openDB<QCDb>('qcmaker', 2, { upgrade(db, oldVersion, _newVersion, tx) {
+    if (oldVersion < 1) {
         const datasets = db.createObjectStore('datasets', { keyPath: 'dataRef' });
         datasets.createIndex('by-project', 'projectId');
         db.createObjectStore('discussion_events', { keyPath: ['session_id', 'event_seq'] });
         const images = db.createObjectStore('chart_images', { keyPath: 'chartImageRef' });
         images.createIndex('by-project', 'projectId');
         db.createObjectStore('project_state', { keyPath: 'projectId' });
+    }
+    if (oldVersion >= 1 && oldVersion < 2) {
+        void (async () => {
+            let cursor = await tx.objectStore('project_state').openCursor();
+            while (cursor) {
+                const value = cursor.value;
+                if (value.snapshot) {
+                    const snapshot = value.snapshot;
+                    await cursor.update({ ...value, snapshot: { ...snapshot,
+                        datasetRefs: [...new Set([...(snapshot.datasetRefs ?? []), ...(snapshot.dataRef ? [snapshot.dataRef] : [])])],
+                        materialRefs: snapshot.materialRefs ?? [], chapterRefs: snapshot.chapterRefs ?? [], artifactRefs: snapshot.artifactRefs ?? [],
+                        legacyArtifactsStale: snapshot.legacyArtifactsStale ?? false,
+                    }});
+                }
+                cursor = await cursor.continue();
+            }
+        })();
+    }
     } });
+export const listSavedProjects = async () => (await database).getAll('project_state');
+export const listProjectDatasets = async (projectId: string) => (await database).getAllFromIndex('datasets', 'by-project', projectId);
 export const saveDataset = async (value: StoredDataset) => (await database).put('datasets', value);
 export const loadDataset = async (ref: string) => (await database).get('datasets', ref);
 export const saveDiscussionEvent = async (event: DiscussionEvent) => (await database).put('discussion_events', event);

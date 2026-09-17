@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.api.endpoints import config, data, discussion, ppt, rag, search, topic, visualization
+from backend.app.api.endpoints import activity, authoring, materials, reporting
 from backend.app.api.endpoints.admin import auth as admin_auth
 from backend.app.api.endpoints.admin import data as admin_data
 from backend.app.core.admin_security import init_admin
@@ -33,10 +34,16 @@ async def lifespan(_: FastAPI):
     logging.getLogger(__name__).info("startup cleanup: %s", stats)
     cleanup_task = start_periodic_cleanup()
     event_task = asyncio.create_task(monitor_local_events())
+    from backend.app.services.materials import resume_pending_material_parses
+    pending_materials = await asyncio.to_thread(resume_pending_material_parses)
+    parse_tasks = [asyncio.create_task(materials._parse_later(*item)) for item in pending_materials]
     rebuild_rate_limiter()
     try:
         yield
     finally:
+        for task in parse_tasks:
+            task.cancel()
+        await asyncio.gather(*parse_tasks, return_exceptions=True)
         await admin_data.shutdown_admin_recovery_workers()
         await stop_periodic_cleanup(cleanup_task)
         await stop_periodic_cleanup(event_task)
@@ -60,6 +67,10 @@ app.add_middleware(RateLimitMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 
 app.include_router(config.router, prefix="/api/config", tags=["config"])
+app.include_router(materials.router, prefix='/api', tags=['materials'])
+app.include_router(authoring.router, prefix='/api', tags=['authoring'])
+app.include_router(activity.router, prefix='/api', tags=['activity'])
+app.include_router(reporting.router, prefix='/api', tags=['reporting'])
 app.include_router(topic.router, prefix="/api/topic", tags=["topic"])
 app.include_router(data.router, prefix="/api/data", tags=["data"])
 app.include_router(rag.router, prefix="/api/rag", tags=["rag"])

@@ -22,11 +22,17 @@ def _from_row(row, restored_from_revision: int | None = None) -> DatasetResponse
     return DatasetResponse(dataset_id=row["dataset_id"], revision=row["revision"], confirmed_revision=row["confirmed_revision"], restored_from_revision=restored_from_revision, filename=row["filename"], columns=[ColumnInfo.model_validate(x) for x in json.loads(row["columns_json"])], rows=[DataRow.model_validate(x) for x in json.loads(row["current_rows_json"])], report=CleaningReport.model_validate(json.loads(row["report_json"])))
 
 
+def _save_version(db, row):
+    db.execute('INSERT OR IGNORE INTO dataset_versions(dataset_id,version,rows_json,columns_json,report_json,created_at) VALUES(?,?,?,?,?,?)',
+        (row['dataset_id'],row['revision'],row['current_rows_json'],row['columns_json'],row['report_json'],datetime.now(UTC).isoformat()))
+
+
 def create(filename: str, rows: list[DataRow], columns: list[ColumnInfo], report: CleaningReport) -> DatasetResponse:
     dataset_id = f"ds_{uuid4().hex}"; now = datetime.now(UTC); expires = now + timedelta(hours=get_settings().DATASET_TTL_HOURS)
     with transaction(immediate=True) as db:
         db.execute("INSERT INTO datasets VALUES(?,?,?,?,?,?,?,?,?,?)", (dataset_id, filename, 0, None, _dump(rows), _dump(rows), _dump(columns), _dump(report), now.isoformat(), expires.isoformat()))
         row = db.execute("SELECT * FROM datasets WHERE dataset_id=?", (dataset_id,)).fetchone()
+        _save_version(db, row)
     return _from_row(row)
 
 
@@ -54,10 +60,12 @@ def update(dataset_id: str, base_revision: int, rows: list[DataRow], columns: li
     with transaction(immediate=True) as db:
         row = _load_row(dataset_id, db)
         if row["revision"] != base_revision: raise AppException("DATA_REVISION_CONFLICT", "数据版本已变化，请刷新后重试", 409, {"current_revision": row["revision"]})
+        _save_version(db, row)
         revision = base_revision + 1
         expires = datetime.now(UTC) + timedelta(hours=get_settings().DATASET_TTL_HOURS)
         db.execute("UPDATE datasets SET revision=?,confirmed_revision=NULL,current_rows_json=?,columns_json=?,report_json=?,expires_at=? WHERE dataset_id=? AND revision=?", (revision, _dump(rows), _dump(columns), _dump(report), expires.isoformat(), dataset_id, base_revision))
         updated = db.execute("SELECT * FROM datasets WHERE dataset_id=?", (dataset_id,)).fetchone()
+        _save_version(db, updated)
     return _from_row(updated, 0 if restored else None)
 
 

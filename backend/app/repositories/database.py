@@ -7,6 +7,7 @@ from hashlib import sha256
 from typing import Iterator
 
 from backend.app.core.config import PROJECT_ROOT
+from backend.app.repositories.qc_schema import QC_MIGRATION_V2, QC_SCHEMA_VERSION
 
 DATA_DIR = PROJECT_ROOT / "backend" / "data"
 DB_PATH = DATA_DIR / "qcmaker.sqlite3"
@@ -160,6 +161,7 @@ _ADMIN_INDEXES = (
 _SCHEMA_VERSION = 1
 _SCHEMA_MIGRATION_SQL = "\n".join((*_BUSINESS_SCHEMA, *_ADMIN_SCHEMA, *_ADMIN_INDEXES))
 _SCHEMA_CHECKSUM = sha256(_SCHEMA_MIGRATION_SQL.encode("utf-8")).hexdigest()
+_QC_SCHEMA_CHECKSUM = sha256("\n".join(QC_MIGRATION_V2).encode("utf-8")).hexdigest()
 
 
 def connect() -> sqlite3.Connection:
@@ -193,7 +195,7 @@ def init_database() -> None:
         # installed management surface behind.
         db.execute("CREATE TABLE IF NOT EXISTS schema_versions(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, checksum TEXT NOT NULL)")
         applied = {int(row[0]): row[2] for row in db.execute("SELECT version, applied_at, checksum FROM schema_versions")}
-        unsupported = sorted(version for version in applied if version > _SCHEMA_VERSION)
+        unsupported = sorted(version for version in applied if version > QC_SCHEMA_VERSION)
         if unsupported:
             raise RuntimeError(f"unsupported database schema version(s): {unsupported}")
         if _SCHEMA_VERSION in applied:
@@ -204,11 +206,23 @@ def init_database() -> None:
             # The checksum gate above still rejects software/schema drift.
             for statement in (*_BUSINESS_SCHEMA, *_ADMIN_SCHEMA, *_ADMIN_INDEXES):
                 db.execute(statement)
-            return
-        for statement in (*_BUSINESS_SCHEMA, *_ADMIN_SCHEMA, *_ADMIN_INDEXES):
-            db.execute(statement)
-        db.execute(
-            "INSERT INTO schema_versions(version,applied_at,checksum) VALUES(?,?,?)",
-            (_SCHEMA_VERSION, datetime.now(UTC).isoformat(), _SCHEMA_CHECKSUM),
-        )
+        else:
+            for statement in (*_BUSINESS_SCHEMA, *_ADMIN_SCHEMA, *_ADMIN_INDEXES):
+                db.execute(statement)
+            db.execute(
+                "INSERT INTO schema_versions(version,applied_at,checksum) VALUES(?,?,?)",
+                (_SCHEMA_VERSION, datetime.now(UTC).isoformat(), _SCHEMA_CHECKSUM),
+            )
+
+        # v2 is deliberately separate so the frozen v1 checksum remains
+        # compatible with databases created by earlier releases.
+        if QC_SCHEMA_VERSION not in applied:
+            for statement in QC_MIGRATION_V2:
+                db.execute(statement)
+            db.execute(
+                "INSERT INTO schema_versions(version,applied_at,checksum) VALUES(?,?,?)",
+                (QC_SCHEMA_VERSION, datetime.now(UTC).isoformat(), _QC_SCHEMA_CHECKSUM),
+            )
+        elif applied[QC_SCHEMA_VERSION] != _QC_SCHEMA_CHECKSUM:
+            raise RuntimeError(f"schema version {QC_SCHEMA_VERSION} checksum mismatch")
 

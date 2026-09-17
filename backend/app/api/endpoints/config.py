@@ -12,11 +12,66 @@ from backend.app.core.security import outbound_http_clients, validate_outbound_b
 from backend.app.models.contracts import BudgetResetResult, ConfigUpdate, ConfigView, ConnectivityCheck, ModelListRequest, ModelListResponse, UsageView
 from backend.app.services.model_providers import PROVIDERS, get_provider
 from backend.app.services.model_roles import ROLE_LABELS, VALID_ROLES, credential_providers, role_models_view
+from backend.app.models.config_profiles import ProfileSaveRequest, ProbeRequest, ProbeReport, ProbeRow
+from backend.app.repositories.config_profile_repository import activate as activate_profile, has_active_profile, list_profiles, save_and_activate, resolve_draft, migrate_legacy
+from backend.app.core.llm_gateway import probe_target
 from backend.app.services.usage import get_usage, reset_provider_overrun
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(dependencies=[Depends(verify_access_token)])
+
+@router.get("/profiles")
+def profiles():
+    migrate_legacy(get_settings())
+    rows = list_profiles()
+    active = next((p.profile_id for p in rows if p.active), None)
+    revision = rows[0].config_revision if rows else get_settings().CONFIG_REVISION
+    return {"profiles": rows, "active_profile_id": active, "config_revision": revision}
+
+@router.post("/profiles/save")
+def save_profile(request: ProfileSaveRequest):
+    clear_client_cache()
+    return save_and_activate(request)
+
+@router.post("/profiles/{profile_id}/activate")
+def activate_saved_profile(profile_id: str, request: dict):
+    result = activate_profile(profile_id, int(request.get("expected_revision", -1)))
+    clear_client_cache()
+    return result
+
+@router.post("/probe-draft", response_model=ProbeReport)
+async def probe_draft(request: ProbeRequest):
+    snapshot = resolve_draft(request.draft, request.expected_revision)
+    rows = []
+    targets = {}
+    if snapshot.draft.default_model is not None:
+        try:
+            from backend.app.services.model_roles import resolve_role_target
+            target = resolve_role_target(None, snapshot=snapshot)
+            key = (target.provider, target.base_url.rstrip("/"), target.model, target.api_style, target.api_key)
+            targets.setdefault(key, []).append(("default", target))
+        except AppException as exc:
+            rows.append(ProbeRow(role="default", service_id=None, provider=None, base_url=None, model=None, status="missing", code=exc.code, message=exc.message))
+    for role in sorted(VALID_ROLES):
+        try:
+            from backend.app.services.model_roles import resolve_role_target
+            target = resolve_role_target(role, snapshot=snapshot)
+            key = (target.provider, target.base_url.rstrip("/"), target.model, target.api_style, target.api_key)
+            targets.setdefault(key, []).append((role, target))
+        except AppException as exc:
+            rows.append(ProbeRow(role=role, service_id=None, provider=None, base_url=None, model=None, status="missing", code=exc.code, message=exc.message))
+    results = {}
+    for key, refs in targets.items():
+        try: results[key] = await probe_target(refs[0][1])
+        except AppException as exc: results[key] = {"error": exc}
+    for key, refs in targets.items():
+        result = results[key]
+        for role, target in refs:
+            error = result.get("error") if isinstance(result, dict) else None
+            rows.append(ProbeRow(role=role, service_id=target.service_id, provider=target.provider, base_url=target.base_url, model=target.model, status="failed" if error else "passed", code=error.code if error else None, message=error.message if error else str(result.get("message", "调用成功")), latency_ms=None if error else result.get("latency_ms")))
+    rows.sort(key=lambda x: x.role)
+    return ProbeReport(draft_version=request.draft_version, config_revision=snapshot.config_revision, passed=bool(rows) and all(row.status == "passed" for row in rows), rows=rows)
 
 _CATALOG = {provider.id: provider for provider in PROVIDERS}
 
@@ -65,6 +120,13 @@ def get_config(): return view()
 @router.post("/update", response_model=ConfigView)
 def update_config(config: ConfigUpdate):
     settings = get_settings()
+    if has_active_profile() and any(value is not None for value in (
+        config.llm_provider, config.openai_api_key, config.openai_base_url,
+        config.openai_model, config.use_local_llm, config.local_llm_url,
+        config.local_llm_model, config.tavily_api_key, config.role_models,
+        config.provider_credentials,
+    )):
+        raise AppException("CONFIG_PROFILE_REQUIRED", "当前已有活动配置方案，请通过配置方案接口保存模型设置", 409)
     payload = {key.upper(): value for key, value in config.model_dump().items() if value is not None}
     if (not config.llm_provider or config.llm_provider == settings.LLM_PROVIDER) and config.openai_base_url and config.openai_base_url.rstrip("/") != settings.OPENAI_BASE_URL.rstrip("/") and settings.OPENAI_API_KEY and not config.openai_api_key:
         raise AppException("LLM_KEY_REQUIRED", "变更服务地址时必须填写该地址对应的 API Key", 400)
@@ -141,6 +203,16 @@ async def models(request: ModelListRequest):
     default_url = settings.LOCAL_LLM_URL if provider.api_style == "ollama" else (stored.get("base_url") or (settings.OPENAI_BASE_URL if request.provider == settings.LLM_PROVIDER else provider.base_url))
     base_url = validate_outbound_base_url((request.base_url or default_url).rstrip("/"), allow_private=provider.api_style == "ollama")
     api_key = _bound_key(request.provider, base_url, request.api_key)
+    if request.credential_id and not request.api_key:
+        from backend.app.repositories.database import connect
+        db = connect()
+        try:
+            credential = db.execute('SELECT provider,base_url,secret FROM config_credentials WHERE credential_id=?', (request.credential_id,)).fetchone()
+        finally:
+            db.close()
+        if not credential or credential['provider'] != request.provider or (credential['base_url'] or '').rstrip('/') != base_url.rstrip('/'):
+            raise AppException('LLM_KEY_REQUIRED', '服务地址变化，请提供对应密钥', 400)
+        api_key = credential['secret']
     if provider.api_style == "ollama":
         url = f"{base_url.removesuffix('/v1')}/api/tags"; headers = {}
     else:

@@ -74,6 +74,7 @@ def isolated_storage(tmp_path, monkeypatch):
     from backend.app.repositories import database
     from backend.app.services import ppt as ppt_service
     from backend.app.services.rag import rag_service
+    from backend.app.services.materials import material_service
 
     data_dir = tmp_path / "data"
     monkeypatch.setattr(database, "DATA_DIR", data_dir)
@@ -84,6 +85,7 @@ def isolated_storage(tmp_path, monkeypatch):
     monkeypatch.setattr(rag_service, "vector_store", None)
     monkeypatch.setattr(rag_service, "collection_key", "")
     monkeypatch.setattr(rag_service, "config_revision", -1)
+    monkeypatch.setattr(material_service, "storage_root", tmp_path / "materials")
     return tmp_path
 
 

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { forwardRef, useImperativeHandle } from 'react';
-import { VisualizationPage } from '../pages/VisualizationPage';
+import { LegacyVisualizationPage as VisualizationPage } from '../pages/VisualizationPage';
 import { generateChart, recommendChart } from '../api/visualization';
 import { chartInsight } from '../api/insight';
 import { loadDataset } from '../storage/db';

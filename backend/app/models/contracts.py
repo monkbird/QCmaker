@@ -61,6 +61,7 @@ class ModelListRequest(BaseModel):
     provider: str = "openai"
     base_url: str | None = None
     api_key: str | None = None
+    credential_id: str | None = None
 
 
 class ModelListResponse(BaseModel):

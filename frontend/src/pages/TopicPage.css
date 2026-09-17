@@ -1,0 +1,19 @@
+.topic-workbench { grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
+.topic-workbench .method-strip { min-width: 0; max-height: calc(100vh - 180px); overflow-y: auto; gap: 18px; padding: 16px; }
+.material-workspace-compact { min-width: 0; background: rgba(9,18,35,.85) !important; }
+.material-workspace-compact .ant-card-body { padding: 14px; }
+.material-workspace-compact .ant-space-item { min-width: 0; width: 100%; }
+.material-workspace-compact .ant-select { width: 100%; }
+.material-summary { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: rgba(8,17,33,.4); }
+.material-summary p { overflow-wrap: anywhere; line-height: 1.6; margin: 0 0 10px; }
+.material-summary span { color: var(--muted); font-size: 12px; }
+.topic-extra-materials { min-width: 0; }
+.topic-extra-materials > summary { cursor: pointer; color: var(--ink-soft); font-size: 13px; }
+.topic-extra-materials[open] > summary { margin-bottom: 14px; }
+@media (max-width: 1000px) {
+  .topic-workbench { grid-template-columns: minmax(0, 1fr); }
+  .topic-workbench .method-strip { max-height: 420px; }
+}
+
+.ant-drawer .parse-coverage > details { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+.ant-drawer .parse-coverage summary { cursor: pointer; font-weight: 500; }

@@ -1,0 +1,33 @@
+.config-workspace { display: grid; gap: 20px; }
+.config-workspace .ant-card { background: rgba(9, 18, 35, .90) !important; }
+.config-workspace .ant-card-head { min-height: 50px; }
+.config-workspace .ant-card-body { padding: 20px; }
+.config-profile-row { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto; align-items: end; gap: 16px; }
+.config-field { display: flex; min-width: 0; flex-direction: column; gap: 7px; }
+.config-field > span:first-child { color: var(--ink-soft); font-size: 12px; }
+.config-field .ant-select, .config-field .ant-input-affix-wrapper, .config-field .ant-input, .config-field .ant-select-auto-complete { width: 100%; }
+.config-hint { color: var(--muted); font-size: 12px; line-height: 1.7; margin: 12px 0 0; }
+.config-services { display: grid; gap: 16px; }
+.config-service { border: 1px solid var(--line); border-radius: 12px; background: rgba(9, 19, 35, .48); padding: 16px; min-width: 0; }
+.config-service-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+.config-service-heading strong { font-size: 14px; }
+.config-service-fields { display: grid; grid-template-columns: minmax(130px, .7fr) minmax(220px, 1.5fr) minmax(180px, 1fr) auto; align-items: end; gap: 12px; }
+.config-service .ant-alert { margin-top: 12px; }
+.config-default { display: grid; grid-template-columns: 1fr 1.6fr; gap: 16px; padding-top: 18px; margin-top: 18px; border-top: 1px solid var(--line); }
+.config-lower { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(270px, 1fr); gap: 20px; align-items: start; }
+.config-role-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.config-role { padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: rgba(8, 17, 33, .38); min-width: 0; }
+.config-role strong { display: block; font-size: 13px; margin-bottom: 10px; }
+.config-role-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 8px; }
+.config-role-fields .ant-select { width: 100%; min-width: 0; }
+.config-search { display: grid; gap: 16px; }
+.config-search .config-hint { margin: 0; }
+@media (max-width: 1200px) {
+  .config-lower { grid-template-columns: minmax(0, 1fr); }
+  .config-service-fields { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
+}
+@media (max-width: 700px) {
+  .config-profile-row, .config-service-fields, .config-default, .config-role-grid { grid-template-columns: minmax(0, 1fr); }
+  .config-workspace .ant-card-body { padding: 14px; }
+  .config-service { padding: 12px; }
+}

@@ -4,7 +4,7 @@ import { getConfig } from '../api/config';
 import { errorMessage } from '../api/client';
 import type { DatasetResponse, DiscussionSummary, PPTResult } from '../types/api';
 import type { DiscussionEvent } from '../types/discussion';
-import { clearProject, saveChartImage, saveWizardSnapshot, type StoredDataset } from '../storage/db';
+import { saveChartImage, saveWizardSnapshot, type StoredDataset } from '../storage/db';
 import { createInitialState, wizardReducer } from './wizardReducer';
 import { restoreWizard } from './restoreWizard';
 import type { WizardAction, WizardState } from './wizardTypes';
@@ -21,6 +21,7 @@ interface WizardValue {
     setChart: (option: EChartsOption, blob: Blob) => Promise<void>;
     setPpt: (result: PPTResult) => Promise<void>;
     reset: () => Promise<void>;
+    openProject: (projectId: string) => Promise<void>;
 }
 const Context = createContext<WizardValue | null>(null);
 const STORAGE_KEY = 'qcmaker_wizard';
@@ -103,11 +104,15 @@ export function WizardProvider({ children }: {
             },
             setPpt: (result: PPTResult) => commit({ type: 'SET_PPT_RESULT', payload: result }, undefined, expected),
             reset: async () => {
-                const oldProject = current.current.currentProjectId;
                 await pending.current.catch(() => undefined);
                 await commit({ type: 'RESET_PROJECT', payload: crypto.randomUUID() });
-                await clearProject(oldProject);
                 setNotice(null);
+            },
+            openProject: async (projectId: string) => {
+                await pending.current.catch(() => undefined);
+                const restored = await restoreWizard({ currentProjectId: projectId });
+                await commit({ type: 'HYDRATE_SUCCESS', payload: restored.state });
+                setNotice(restored.notice);
             },
         };
     }, [commit, currentProjectId, topic, scopedDataRef, datasetRevision]);

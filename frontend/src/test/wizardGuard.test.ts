@@ -8,8 +8,16 @@ describe('routeForState',()=>{
     expect(routeForState('/topic',state)).toBeNull()
   })
 
-  it('redirects later steps to the first missing prerequisite',()=>{
+  it('allows source collection and chapter drafting without Excel or model configuration',()=>{
     const state={...createInitialState(),hydration:'ready' as const,configStatus:'ready' as const}
-    expect(routeForState('/data',state)).toBe('/topic')
+    expect(routeForState('/data',state)).toBeNull()
+    expect(routeForState('/authoring',{...state,configStatus:'missing'})).toBeNull()
+    expect(routeForState('/topic',{...state,configStatus:'missing'})).toBeNull()
+    expect(routeForState('/ppt',state)).toBeNull()
+  })
+
+  it('retains prerequisites only for the legacy discussion workflow',()=>{
+    const state={...createInitialState(),hydration:'ready' as const,configStatus:'ready' as const,topic:'课题'}
+    expect(routeForState('/discussion',state)).toBe('/data')
   })
 })

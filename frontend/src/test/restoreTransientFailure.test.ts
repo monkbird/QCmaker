@@ -41,7 +41,9 @@ describe('restoring after temporary dataset verification failures', () => {
       expect(paused.state.dataConfirmed).toBe(false)
       expect(paused.notice).toBeTruthy()
       for (const field of artifactFields) expect(paused.state[field]).toEqual(original[field])
-      for (const path of ['/discussion', '/visualization', '/ppt']) expect(routeForState(path, paused.state)).toBe('/data')
+      expect(routeForState('/discussion', paused.state)).toBe('/data')
+      // Chapter-based charts/reports remain available even when the legacy dataset is offline.
+      for (const path of ['/visualization', '/ppt']) expect(routeForState(path, paused.state)).toBeNull()
       // Mirrors HYDRATE_SUCCESS persistence, including dataConfirmed=false.
       await saveWizardSnapshot(paused.state)
     }

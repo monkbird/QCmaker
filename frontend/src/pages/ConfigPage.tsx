@@ -1,172 +1,146 @@
-import { ApiOutlined, CheckCircleOutlined, CloudServerOutlined, KeyOutlined, LinkOutlined, ReloadOutlined, SaveOutlined, TeamOutlined } from '@ant-design/icons';
-import { Alert, AutoComplete, Button, Card, Form, Input, Select, Skeleton, Space, Tag, Tooltip, message } from 'antd';
-import { useEffect, useMemo, useState } from 'react';
+import { ApiOutlined, DeleteOutlined, PlusOutlined, SaveOutlined } from '@ant-design/icons';
+import { Alert, Button, Card, Input, Modal, Select, Skeleton, Space, Tag, message } from 'antd';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { checkConnectivity, getConfig, getModels, getProviders, updateConfig } from '../api/config';
+import { activateProfile, getModels, getProfiles, getProviders, probeDraft, saveProfile, testSearch, type ProbeReport } from '../api/config';
 import { errorMessage } from '../api/client';
 import { StepPage } from '../components/StepPage';
 import { useWizard } from '../context/WizardContext';
-import type { ConfigUpdate, ConfigView, ModelProvider } from '../types/api';
-const regionName: Record<string, string> = { cn: '国内服务', global: '国际服务', local: '本地运行', custom: '自定义中转', plan: 'Coding 套餐', gateway: '聚合网关' };
-const ROLE_SLOTS: [
-    string,
-    string
-][] = [
-    ['moderator', '主持人'], ['researcher', '研究员'], ['analyst', '数据分析师'], ['critic', '反方评审'],
-    ['writer', '成果撰稿人'], ['topic', '选题评估'], ['data', '清洗顾问'], ['chart', '图表顾问'],
-];
+import type { ModelProvider } from '../types/api';
+import type { ConfigDraft, ConfigProfile, ServiceDraft } from '../api/config';
+import './ConfigPage.css';
+import { ModelPicker } from '../components/ModelPicker';
+
+const ROLES = [['moderator','主持人'],['researcher','研究员'],['analyst','数据分析师'],['critic','反方评审'],['writer','成果撰稿人'],['topic','选题评估'],['data','清洗顾问'],['chart','图表顾问']] as const;
+const emptyDraft = (): ConfigDraft => ({ name: '当前配置', default_model: null, roles: {}, services: [], search: null });
+const hydrate = (d: ConfigDraft): ConfigDraft => ({ ...d, roles: { ...d.roles }, services: d.services.map(s => ({ ...s, api_key: undefined })), search: d.search ? { ...d.search, api_key: undefined } : null });
+
 export function ConfigPage() {
-    const [form] = Form.useForm<ConfigUpdate>();
-    const [config, setConfig] = useState<ConfigView | null>(null);
-    const [providers, setProviders] = useState<ModelProvider[]>([]);
-    const [models, setModels] = useState<string[]>([]);
-    const [modelsFetchedAt, setModelsFetchedAt] = useState<Date | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
-    const [modelLoading, setModelLoading] = useState(false);
-    const [roleModels, setRoleModels] = useState<Record<string, string>>({});
-    const [roleSaving, setRoleSaving] = useState(false);
-    const [modelsCache, setModelsCache] = useState<Record<string, string[]>>({});
-    const [credProvider, setCredProvider] = useState<string | undefined>();
-    const [credKey, setCredKey] = useState('');
-    const [credBaseUrl, setCredBaseUrl] = useState('');
-    const [credSaving, setCredSaving] = useState(false);
-    const navigate = useNavigate();
-    const { setConfigStatus } = useWizard();
-    const providerId = Form.useWatch('llm_provider', form) ?? 'openai';
-    const provider = providers.find(item => item.id === providerId);
-    useEffect(() => { void Promise.all([getConfig(), getProviders()]).then(([c, p]) => { setConfig(c); setProviders(p); setRoleModels(c.role_models ?? {}); const local = c.llm_provider === 'ollama'; form.setFieldsValue({ ...c, llm_provider: c.llm_provider, openai_base_url: local ? c.local_llm_url : c.openai_base_url, openai_model: local ? c.local_llm_model : c.openai_model, openai_api_key: '', tavily_api_key: '' }); }).catch(e => message.error(errorMessage(e))).finally(() => setLoading(false)); }, [form]);
-    const providerOptions = useMemo(() => Object.entries(regionName).map(([region, label]) => ({ label, options: providers.filter(item => item.region === region).map(item => ({ label: item.name, value: item.id })) })).filter(group => group.options.length), [providers]);
-    const credProviderOptions = useMemo(() => providers.filter(item => item.region !== 'local').map(item => ({ label: item.name, value: item.id })), [providers]);
-    const chooseProvider = (id: string) => { const next = providers.find(item => item.id === id); if (!next)
-        return; form.setFieldsValue({ llm_provider: id, openai_base_url: next.base_url, openai_model: '', openai_api_key: '' }); setModels([]); setModelsFetchedAt(null); };
-    const loadModels = async () => { const values = form.getFieldsValue(); const selectedProvider = values.llm_provider ?? 'openai'; const hasSavedKey = Boolean(config?.has_openai_key && config.llm_provider === selectedProvider) || Boolean(config?.credential_providers?.includes(selectedProvider)); if (selectedProvider !== 'ollama' && !values.openai_api_key && !hasSavedKey) {
-        message.warning('请先填写该服务商的 API Key，再联网获取模型');
-        return;
-    } setModelLoading(true); try {
-        const result = await getModels({ provider: selectedProvider, base_url: values.openai_base_url, api_key: values.openai_api_key || undefined });
-        setModels(result.models);
-        setModelsCache(current => ({ ...current, [selectedProvider]: result.models }));
-        setModelsFetchedAt(new Date());
-        message.success(`已从厂商接口获取 ${result.models.length} 个模型`);
+  const [providers, setProviders] = useState<ModelProvider[]>([]); const [profiles, setProfiles] = useState<ConfigProfile[]>([]);
+  const [draft, setDraft] = useState<ConfigDraft>(emptyDraft); const [selected, setSelected] = useState<string>(); const [revision, setRevision] = useState(0);
+  const [loading, setLoading] = useState(true); const [saving, setSaving] = useState(false); const [dirty, setDirty] = useState(false); const [pending, setPending] = useState<string>(); const [probe, setProbe] = useState<ProbeReport | null>(null); const [searchStatus, setSearchStatus] = useState<string>(); const [models, setModels] = useState<Record<string,string[]>>({}); const probeVersion = useRef(0); const searchVersion = useRef(0);
+  const [modelStatus, setModelStatus] = useState<Record<string, { state: 'loading' | 'success' | 'error'; text: string }>>({});
+  const [deleteId, setDeleteId] = useState<string>();
+  const modelRequests = useRef<Record<string, number>>({});
+  const navigate = useNavigate(); const { setConfigStatus } = useWizard(); const providerMap = useMemo(() => new Map(providers.map(p => [p.id, p])), [providers]);
+  useEffect(() => { void Promise.all([getProviders(), getProfiles()]).then(([ps, result]) => { setProviders(ps); setProfiles(result.profiles); setSelected(result.active_profile_id ?? undefined); setRevision(result.config_revision); const p = result.profiles.find(x => x.profile_id === result.active_profile_id); if (p) setDraft(hydrate(p.draft as ConfigDraft)); }).catch(e => message.error(errorMessage(e))).finally(() => setLoading(false)); }, []);
+  const mark = (next: ConfigDraft) => { setDraft(next); setDirty(true); setProbe(null); };
+  const clearModels = (id: string) => {
+    modelRequests.current[id] = (modelRequests.current[id] ?? 0) + 1;
+    setModels(m => ({ ...m, [id]: [] }));
+    setModelStatus(m => { const next = { ...m }; delete next[id]; return next; });
+  };
+  const updateService = (i: number, patch: Partial<ServiceDraft>) => {
+    const service = draft.services[i];
+    clearModels(service.service_id);
+    const changedProvider = patch.provider !== undefined && patch.provider !== service.provider;
+    const resetBinding = (binding: ConfigDraft['default_model']) => changedProvider && binding?.service_id === service.service_id ? { ...binding, model: '' } : binding;
+    mark({ ...draft, services: draft.services.map((s, n) => n === i ? { ...s, ...patch } : s),
+      default_model: resetBinding(draft.default_model),
+      roles: Object.fromEntries(Object.entries(draft.roles).map(([role, binding]) => [role, resetBinding(binding)])) });
+  };
+  const activate = async (id: string) => { try { const r = await activateProfile(id, revision); setSelected(id); setRevision(r.config_revision); draft.services.forEach(s => clearModels(s.service_id)); setDraft(hydrate(r.draft as ConfigDraft)); setSearchStatus(undefined); setDirty(false); setProbe(null); setProfiles(ps => ps.map(p => ({ ...p, active: p.profile_id === id }))); } catch (e) { message.error(errorMessage(e)); } };
+  const switchTo = (id: string) => { if (dirty) setPending(id); else void activate(id); };
+  const draftIssues = [
+    ...(!draft.name.trim() ? ['请填写方案名称'] : []),
+    ...(draft.default_model && !draft.default_model.model.trim() ? ['默认模型：请选择或输入模型 ID'] : []),
+    ...ROLES.flatMap(([role, label]) => draft.roles[role] && !draft.roles[role]!.model.trim()
+      ? [`${label}：请选择模型，或将服务改为“跟随默认”`] : []),
+    ...draft.services.flatMap((service, index) => !service.base_url.trim() ? [`服务 ${index + 1}：请填写接口地址`] : []),
+  ];
+  const validateDraft = () => {
+    if (!draftIssues.length) return true;
+    message.error(draftIssues[0]);
+    return false;
+  };
+  const save = async (asNew = false, continueToTopic = false): Promise<boolean> => { if (!validateDraft()) return false; setSaving(true); try { const outgoing = asNew ? { ...draft, name: `方案 ${new Date().toLocaleString('zh-CN')}` } : draft; const r = await saveProfile({ profile_id: asNew ? undefined : selected, expected_revision: revision, draft: outgoing }); setSelected(r.profile_id); setRevision(r.config_revision); setDraft(hydrate(r.draft as ConfigDraft)); setDirty(false); setProfiles(ps => [r, ...ps.filter(p => p.profile_id !== r.profile_id)]); setConfigStatus('ready'); message.success('配置方案已保存并立即生效'); if (continueToTopic) navigate('/topic'); return true; } catch (e) { message.error(errorMessage(e)); return false; } finally { setSaving(false); } };
+  const test = async () => { if (!validateDraft()) return; const v = ++probeVersion.current; try { const r = await probeDraft({ draft_version: v, expected_revision: revision, draft }); if (v === probeVersion.current) setProbe(r); } catch (e) { message.error(errorMessage(e)); } };
+  const searchTest = async () => { if (!validateDraft()) return; const v = ++searchVersion.current; try { const r = await testSearch({ draft_version: v, expected_revision: revision, draft }); if (v === searchVersion.current) setSearchStatus(`${r.status}: ${r.message}`); } catch (e) { message.error(errorMessage(e)); } };
+  const fetchModels = async (service: ServiceDraft) => {
+    const id = service.service_id;
+    const request = (modelRequests.current[id] ?? 0) + 1;
+    modelRequests.current[id] = request;
+    setModelStatus(m => ({ ...m, [id]: { state: 'loading', text: '正在获取模型…' } }));
+    try {
+      const r = await getModels({ provider: service.provider, base_url: service.base_url, api_key: service.api_key, credential_id: service.credential_id });
+      if (modelRequests.current[id] !== request) return;
+      setModels(m => ({ ...m, [id]: r.models }));
+      setModelStatus(m => ({ ...m, [id]: r.models.length
+        ? { state: 'success', text: `已获取 ${r.models.length} 个模型，可在默认模型和角色模型中搜索选择。` }
+        : { state: 'error', text: '服务未返回可选模型，请检查接口地址，或手动输入模型 ID。' } }));
+    } catch (e) {
+      if (modelRequests.current[id] !== request) return;
+      setModelStatus(m => ({ ...m, [id]: { state: 'error', text: `获取失败：${errorMessage(e)}。可重试，或手动输入模型 ID。` } }));
     }
-    catch (e) {
-        setModels([]);
-        setModelsFetchedAt(null);
-        message.error(errorMessage(e));
-    }
-    finally {
-        setModelLoading(false);
-    } };
-    const save = async (values: ConfigUpdate) => { setSaving(true); try {
-        const local = values.llm_provider === 'ollama';
-        const next = await updateConfig({ ...values, use_local_llm: local, openai_base_url: local ? undefined : values.openai_base_url, openai_model: local ? undefined : values.openai_model, local_llm_url: local ? values.openai_base_url : undefined, local_llm_model: local ? values.openai_model : undefined });
-        setConfig(next);
-        setConfigStatus(next.status);
-        message.success('模型服务已保存并立即生效');
-        navigate('/topic');
-    }
-    catch (e) {
-        message.error(errorMessage(e));
-    }
-    finally {
-        setSaving(false);
-    } };
-    const check = async () => { try {
-        const values = form.getFieldsValue();
-        const result = await checkConnectivity({ provider: values.llm_provider ?? 'openai', base_url: values.openai_base_url, api_key: values.openai_api_key || undefined, model: values.openai_model });
-        message.success(`${result.model} · ${result.latency_ms}ms`);
-    }
-    catch (e) {
-        message.error(errorMessage(e));
-    } };
-    const setRole = (slot: string, patch: {
-        provider?: string;
-        model?: string;
-    }) => { setRoleModels(current => { const value = current[slot] ?? ''; const [p] = value.split('|'); const nextProvider = patch.provider !== undefined ? patch.provider : p; const providerChanged = patch.provider !== undefined && patch.provider !== p; const nextModel = providerChanged ? '' : patch.model !== undefined ? patch.model : value.split('|')[1] ?? ''; const next = { ...current }; if (!nextProvider)
-        delete next[slot];
-    else
-        next[slot] = `${nextProvider}|${nextModel}`; return next; }); };
-    const saveRoles = async () => { setRoleSaving(true); try {
-        const next = await updateConfig({ role_models: roleModels });
-        setConfig(next);
-        message.success('角色分工已保存');
-    }
-    catch (e) {
-        message.error(errorMessage(e));
-    }
-    finally {
-        setRoleSaving(false);
-    } };
-    const saveCredential = async () => { if (!credProvider) {
-        message.warning('请选择要保存密钥的服务商');
-        return;
-    } if (!credKey.trim()) {
-        message.warning('请输入 API Key');
-        return;
-    } setCredSaving(true); try {
-        const next = await updateConfig({ provider_credentials: { [credProvider]: { api_key: credKey.trim(), base_url: credBaseUrl.trim() || undefined } } });
-        setConfig(next);
-        setCredKey('');
-        setCredBaseUrl('');
-        message.success(`已保存 ${credProvider} 的凭据，可在角色分工中使用`);
-    }
-    catch (e) {
-        message.error(errorMessage(e));
-    }
-    finally {
-        setCredSaving(false);
-    } };
-    const fetchRoleModels = async (slot: string) => { const target = roleModels[slot]; if (!target)
-        return message.warning('该角色当前跟随主模型'); const pid = target.split('|')[0]; try {
-        const cached = modelsCache[pid];
-        const list = cached ?? (await getModels({ provider: pid })).models;
-        if (!cached)
-            setModelsCache(current => ({ ...current, [pid]: list }));
-        setRoleModels(current => { const value = current[slot] ?? ''; const model = value.split('|')[1] ?? ''; return { ...current, [slot]: list.includes(model) || !model ? `${pid}|${model || (list[0] ?? '')}` : `${pid}|${model}` }; });
-        message.success(`${pid} 共 ${list.length} 个模型，点击模型输入框即可下拉选择`);
-    }
-    catch (e) {
-        message.error(errorMessage(e));
-    } };
-    return <StepPage eyebrow="01 · SYSTEM" title="模型与协同" description="主模型负责兜底；Coding 套餐与聚合网关按角色分配，形成多视角协作。" aside={config && <Tag color={config.status === 'ready' ? 'success' : 'warning'}>{config.status === 'ready' ? '服务就绪' : '等待配置'}</Tag>} actions={<><Button icon={<ApiOutlined />} onClick={() => void check()}>测试连接</Button><Button type="primary" icon={<SaveOutlined />} loading={saving} onClick={() => form.submit()}>保存并继续</Button></>}>
-    {loading ? <Skeleton active/> : <div className="config-grid">
-      <div className="config-top">
-      <Card className="panel-card provider-card" title={<span><CloudServerOutlined /> 主模型服务</span>} extra={<Tag>未分配角色的默认</Tag>}><Form form={form} layout="vertical" onFinish={save} requiredMark={false}>
-        <Form.Item name="llm_provider" label="主模型服务商" rules={[{ required: true }]}><Select showSearch optionFilterProp="label" options={providerOptions} onChange={chooseProvider}/></Form.Item>
-        <div className="provider-meta"><span className={`region-mark region-mark--${provider?.region ?? 'custom'}`}>{provider ? regionName[provider.region] : '自定义'}</span><span>{provider?.api_style === 'ollama' ? '本地模型仓库' : 'OpenAI 兼容接口'}</span>{provider?.key_url && <a href={provider.key_url} target="_blank" rel="noreferrer"><LinkOutlined /> 获取密钥</a>}{provider?.docs_url && <a href={provider.docs_url} target="_blank" rel="noreferrer">接口文档</a>}</div>
-        <Form.Item name="openai_base_url" label="API 地址" rules={[{ required: true, message: '请输入厂商 API 地址' }]}><Input placeholder="https://…/v1"/></Form.Item>
-        {providerId !== 'ollama' && <Form.Item name="openai_api_key" label="API Key / 套餐令牌" rules={[{ required: !(config?.has_openai_key && config.llm_provider === providerId) && !config?.credential_providers?.includes(providerId), message: '切换服务商时请输入对应的 API Key' }]} extra={config?.credential_providers?.includes(providerId) ? '凭据库已存此服务商的 Key，可直接留空' : config?.has_openai_key && config.llm_provider === providerId ? '已配置；留空表示不修改' : '密钥仅保存在本机，不回显'}><Input.Password placeholder={config?.has_openai_key && config.llm_provider === providerId ? '已配置（不显示）' : '粘贴 API Key 或 Coding Plan 令牌'}/></Form.Item>}
-        <Form.Item name="openai_model" label={<span>模型名称 <small className="field-hint">点击输入框获取厂商模型</small></span>} rules={[{ required: true, message: '请选择或输入模型名称' }]}><AutoComplete options={models.map(value => ({ value, label: value }))} filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())} onFocus={() => { if (!modelLoading)
-            void loadModels(); }}><Input suffix={<Tooltip title="刷新厂商模型"><Button type="text" size="small" className="model-refresh" loading={modelLoading} icon={<ReloadOutlined />} onClick={event => { event.preventDefault(); event.stopPropagation(); void loadModels(); }} aria-label="刷新厂商模型"/></Tooltip>} placeholder="选择或手工输入模型 ID"/></AutoComplete></Form.Item>
-        {modelsFetchedAt && <div className="model-source"><i className="is-live"/>厂商实时清单 · {modelsFetchedAt.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 获取</div>}
-        <Form.Item name="tavily_api_key" label="Tavily Key（可选）" extra={config?.has_tavily_key ? '已配置；留空表示不修改' : '用于研究员联网检索'}><Input.Password /></Form.Item>
-      </Form></Card>
-      <Card className="panel-card cred-card" title={<span><KeyOutlined /> 服务商凭据库</span>} extra={<Space size={4} wrap>{config?.credential_providers?.length ? config.credential_providers.map(pid => <Tag key={pid} color="green">{pid}</Tag>) : <Tag>暂无</Tag>}</Space>}>
-        <p style={{ color: 'var(--muted)', fontSize: 12, margin: '0 0 10px' }}>为主模型之外的服务商保存 Key；保存后即可在下方「角色分工」中把它们指派给任意角色。Coding Plan 请粘贴套餐控制台提供的 Key。</p>
-        <div className="cred-form">
-          <Select showSearch optionFilterProp="label" placeholder="选择服务商（套餐 / 网关 / 厂商）" value={credProvider} options={credProviderOptions} onChange={id => { setCredProvider(id); const preset = providers.find(item => item.id === id)?.base_url; setCredBaseUrl(preset && preset.startsWith('https://') ? '' : credBaseUrl); }}/>
-          <Input.Password placeholder="API Key / 计划令牌" value={credKey} onChange={e => setCredKey(e.target.value)}/>
-          <Input placeholder="自定义 API 地址（可选，留空用官方默认）" value={credBaseUrl} onChange={e => setCredBaseUrl(e.target.value)}/>
-          <Button type="primary" style={{ width: 'fit-content', alignSelf: 'flex-start' }} loading={credSaving} onClick={() => void saveCredential()}>保存凭据</Button>
+  };
+  const removeService = () => {
+    if (!deleteId) return;
+    clearModels(deleteId);
+    mark({ ...draft, services: draft.services.filter(s => s.service_id !== deleteId),
+      default_model: draft.default_model?.service_id === deleteId ? null : draft.default_model,
+      roles: Object.fromEntries(Object.entries(draft.roles).map(([role, binding]) => [role, binding?.service_id === deleteId ? null : binding])) });
+    setDeleteId(undefined);
+  };
+  const addService = () => {
+    let index = 1;
+    while (draft.services.some(s => s.service_id === `service-${index}`)) index++;
+    mark({ ...draft, services: [...draft.services, { service_id: `service-${index}`, provider: providers[0]?.id ?? 'openai', base_url: providers[0]?.base_url ?? '' }] });
+  };
+  const serviceLabel = (service: ServiceDraft) => {
+    const name = providerMap.get(service.provider)?.name ?? service.provider;
+    const peers = draft.services.filter(s => s.provider === service.provider);
+    return peers.length > 1 ? `${name}（${peers.findIndex(s => s.service_id === service.service_id) + 1}）` : name;
+  };
+  const serviceOptions = draft.services.map(s => ({ value: s.service_id, label: serviceLabel(s) }));
+  const modelOptions = (id?: string) => (id ? models[id] ?? [] : []);
+  if (loading) return <StepPage eyebrow="01 · SYSTEM" title="模型与协同" description="配置方案"><Skeleton active /></StepPage>;
+  return <StepPage eyebrow="01 · SYSTEM" title="模型与协同" description="按角色保存模型服务方案，切换后完整恢复草稿。" actions={<Space><Button icon={<ApiOutlined />} onClick={() => void test()}>测试连接</Button><Button type="primary" loading={saving} icon={<SaveOutlined />} onClick={() => void save(false, true)}>保存并继续</Button></Space>}>
+    <div className="config-workspace">
+      {draftIssues.length > 0 && <Alert showIcon type="warning" title="请补全以下配置后再测试或保存" description={draftIssues.map(issue => <div key={issue}>{issue}</div>)} />}
+      <Card title="配置方案" extra={<Tag color={dirty ? 'gold' : 'green'}>{dirty ? '未保存' : '已保存'}</Tag>}>
+        <div className="config-profile-row">
+          <label className="config-field"><span>切换方案</span><Select aria-label="切换方案" value={selected} placeholder="选择已保存方案" options={profiles.map(p => ({ value: p.profile_id, label: `${p.draft.name ?? p.profile_id}${p.active ? '（当前）' : ''}` }))} onChange={switchTo} /></label>
+          <label className="config-field"><span>方案名称</span><Input value={draft.name} onChange={e => mark({ ...draft, name: e.target.value })} /></label>
+          <Space><Button loading={saving} onClick={() => void save()}>保存配置</Button><Button onClick={() => void save(true)}>另存为</Button></Space>
         </div>
-        <div className="security-note" style={{ marginTop: 12 }}><CheckCircleOutlined /> 密钥只存本机 · 不回显 · 覆盖保存即换钥</div>
+        <p className="config-hint">密钥保存在当前部署的服务端，页面不回显。修改后保存即可生效。</p>
       </Card>
+      <Card title="服务与默认模型" extra={<Button icon={<PlusOutlined />} onClick={addService}>添加服务</Button>}>
+        <div className="config-services">
+          {!draft.services.length && <Alert type="info" showIcon message="暂无模型服务，点击“添加服务”开始配置。" />}
+          {draft.services.map((s, i) => <section className="config-service" key={s.service_id} aria-label={`服务 ${serviceLabel(s)}`}>
+            <div className="config-service-heading"><strong>{serviceLabel(s)}</strong><Button danger type="text" icon={<DeleteOutlined />} aria-label={`删除服务 ${serviceLabel(s)}`} onClick={() => setDeleteId(s.service_id)}>删除服务</Button></div>
+            <div className="config-service-fields">
+              <label className="config-field"><span>服务商</span><Select aria-label={`服务商 ${serviceLabel(s)}`} value={s.provider} options={providers.map(p => ({ value: p.id, label: p.name }))} onChange={provider => updateService(i, { provider, credential_id: null, api_key: undefined, base_url: providerMap.get(provider)?.base_url ?? '' })} /></label>
+              <label className="config-field"><span>接口地址</span><Input value={s.base_url} onChange={e => updateService(i, { base_url: e.target.value, credential_id: null })} /></label>
+              <label className="config-field"><span>API Key</span><Input.Password value={s.api_key ?? ''} placeholder={s.credential_id ? '已保存密钥，留空沿用' : '请输入 API Key'} onChange={e => updateService(i, { api_key: e.target.value || undefined })} /></label>
+              <Button loading={modelStatus[s.service_id]?.state === 'loading'} onClick={() => void fetchModels(s)}>获取模型</Button>
+            </div>
+            {modelStatus[s.service_id] && <Alert showIcon type={modelStatus[s.service_id].state === 'error' ? 'error' : modelStatus[s.service_id].state === 'success' ? 'success' : 'info'} message={modelStatus[s.service_id].text} />}
+          </section>)}
+        </div>
+        <div className="config-default">
+          <label className="config-field"><span>默认服务</span><Select aria-label="默认服务" allowClear placeholder="选择默认服务" value={draft.default_model?.service_id} options={serviceOptions} onChange={id => mark({ ...draft, default_model: id ? { service_id: id, model: '' } : null })} /></label>
+          <label className="config-field"><span>默认模型</span><ModelPicker label="默认模型" disabled={!draft.default_model} value={draft.default_model?.model ?? ''} models={modelOptions(draft.default_model?.service_id)} placeholder="获取模型后选择，或手动输入模型 ID" onChange={model => draft.default_model && mark({ ...draft, default_model: { ...draft.default_model, model } })} /></label>
+        </div>
+      </Card>
+      <div className="config-lower">
+        <Card title="角色分工" extra={<span className="config-hint">未单独指定时跟随默认模型</span>}>
+          <div className="config-role-grid">{ROLES.map(([role, label]) => { const b = draft.roles[role]; return <div key={role} className="config-role"><strong>{label}</strong><div className="config-role-fields">
+            <Select aria-label={`${label}服务`} allowClear placeholder="跟随默认" value={b?.service_id} options={serviceOptions} onChange={id => mark({ ...draft, roles: { ...draft.roles, [role]: id ? { service_id: id, model: draft.default_model?.service_id === id ? draft.default_model.model : b?.service_id === id ? b.model : '' } : null } })} />
+            <ModelPicker label={`${label}模型`} disabled={!b} value={b?.model ?? ''} placeholder={b ? '选择或输入模型 ID' : '跟随默认模型'} models={modelOptions(b?.service_id)} onChange={model => b && mark({ ...draft, roles: { ...draft.roles, [role]: { ...b, model } } })} />
+          </div>{b && !b.model.trim() && <p className="config-hint" style={{ color: '#ffc069' }}>请选择模型，或清除服务选择以跟随默认。</p>}</div>; })}</div>
+        </Card>
+        <Card title="联网检索（可选）"><div className="config-search">
+          <div><Tag color="blue">Tavily</Tag><p className="config-hint">用于检索公开资料和补充选题依据，独立于模型服务配置。</p></div>
+          <label className="config-field"><span>搜索 API Key</span><Input.Password value={draft.search?.api_key ?? ''} placeholder={draft.search?.credential_id ? '已保存密钥，留空沿用' : '请输入 Tavily API Key'} onChange={e => mark({ ...draft, search: { provider: 'tavily', ...(draft.search ?? {}), api_key: e.target.value || undefined } })} /></label>
+          <Space wrap><Button onClick={() => void searchTest()}>测试搜索</Button><a href="https://app.tavily.com" target="_blank" rel="noreferrer">获取 Tavily Key ↗</a></Space>
+          {searchStatus && <Alert type={searchStatus.startsWith('success') ? 'success' : 'warning'} message={searchStatus} />}
+        </div></Card>
       </div>
-      <Card className="panel-card roles-card" title={<span><TeamOutlined /> 角色分工（多模型协同）</span>} extra={<Button size="small" type="primary" loading={roleSaving} onClick={() => void saveRoles()}>保存分工</Button>}>
-        <Alert style={{ marginBottom: 14 }} type="info" showIcon message="未分配的角色跟随主模型；给反方评审、图表顾问指定不同厂商的模型，即可形成真正的多视角研讨。"/>
-        <div className="role-grid">{ROLE_SLOTS.map(([slot, label]) => {
-                const value = roleModels[slot] ?? '';
-                const [rid, model] = value.split('|');
-                return <div key={slot} className="role-row">
-          <span className="role-name">{label}</span>
-          <Select allowClear showSearch optionFilterProp="label" size="small" placeholder="跟随主模型" value={rid || undefined} options={providers.map(item => ({ label: item.name, value: item.id }))} onChange={(id) => setRole(slot, { provider: id ?? '', model: '' })}/>
-          <AutoComplete size="small" value={model || ''} options={(modelsCache[rid] ?? []).map(v => ({ value: v, label: v }))} filterOption={(input, option) => String(option?.value ?? '').toLowerCase().includes(input.toLowerCase())} onChange={v => setRole(slot, { model: v })}><Input size="small" placeholder={modelsCache[rid]?.length ? '搜索或选择模型' : '模型 ID（↻ 拉取清单）'}/></AutoComplete>
-          <Tooltip title="校验该厂商模型清单可用性（需已保存其凭据）"><Button size="small" icon={<ReloadOutlined />} onClick={() => void fetchRoleModels(slot)}/></Tooltip>
-        </div>;
-            })}</div>
-        <div className="security-note" style={{ marginTop: 14 }}><CheckCircleOutlined /> 额度按各套餐/厂商口径分别消耗 · 预算账本在后台持续记录</div>
-      </Card>
-    </div>}
+      {probe && <Alert type={probe.passed ? 'success' : 'warning'} message={probe.passed ? '当前草稿验证通过' : '当前草稿存在未通过项'} description={probe.rows.map(r => `${r.role}: ${r.status} ${r.message}`).join('；')} />}
+    </div>
+    <Modal open={Boolean(deleteId)} title="删除模型服务" okText="确认删除" cancelText="取消" okButtonProps={{ danger: true }} onOk={removeService} onCancel={() => setDeleteId(undefined)}>删除 {serviceOptions.find(s => s.value === deleteId)?.label} 后，关联的默认模型和角色设置将一并清空。保存配置后生效。</Modal>
+    <Modal open={Boolean(pending)} title="当前有未保存变更" onCancel={() => setPending(undefined)} footer={[<Button key="cancel" onClick={() => setPending(undefined)}>取消</Button>, <Button key="discard" onClick={() => { const id = pending; setPending(undefined); setDirty(false); if (id) void activate(id); }}>放弃变更后切换</Button>, <Button key="save" type="primary" onClick={async () => { const ok = await save(); const id = pending; if (ok && id) { setPending(undefined); void activate(id); } }}>保存后切换</Button>]}>切换方案前请处理当前草稿。</Modal>
   </StepPage>;
 }

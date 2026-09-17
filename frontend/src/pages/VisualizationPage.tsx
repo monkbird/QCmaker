@@ -1,3 +1,5 @@
+import { Collapse } from 'antd';
+import { ChapterReporting } from '../components/reporting/ChapterReporting';
 import { BarChartOutlined, CheckOutlined, LineChartOutlined, PieChartOutlined, RobotOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Radio, Select, Space, Tag, message } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -16,6 +18,12 @@ import { useWizard } from '../context/WizardContext';
 import { loadDataset } from '../storage/db';
 import type { ChartInsightResponse, ChartRecommendation, ChartResponse, DatasetResponse } from '../types/api';
 export function VisualizationPage() {
+    const navigate = useNavigate();
+    const { state } = useWizard();
+    return <main className="step-page"><header className="page-heading"><div><h1>图表工具</h1><p>按需补充独立图表；逐章生成的图表已随正文保存，无须在此重新制作。</p></div><Button onClick={()=>navigate('/authoring')}>返回逐章编写</Button></header><ChapterReporting kind="chart"/><Collapse items={[{key:"legacy",label:"旧数据集图表",children:<VisualizationEditor key={JSON.stringify([state.currentProjectId, state.dataRef, state.datasetRevision])}/>}]}/></main>;
+}
+
+export function LegacyVisualizationPage() {
     const { state } = useWizard();
     return <VisualizationEditor key={JSON.stringify([state.currentProjectId, state.dataRef, state.datasetRevision])} />;
 }

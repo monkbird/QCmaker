@@ -86,6 +86,8 @@ def _scopes(scopes: Iterable[str] | str | None) -> list[str]:
 
 def _dataset_references(db) -> set[str]:
     references: set[str] = set()
+    if _table_exists(db, 'dataset_material_links'):
+        references.update(str(row[0]) for row in db.execute('SELECT DISTINCT dataset_id FROM dataset_material_links'))
     if not _table_exists(db, "discussion_sessions"):
         return references
     rows = db.execute("SELECT status,state_json FROM discussion_sessions").fetchall()

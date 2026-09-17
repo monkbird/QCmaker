@@ -1,5 +1,6 @@
 import json
 import logging
+from backend.app.services.qc_coaching import ROLE_BOUNDARIES
 
 import anyio
 from fastapi import APIRouter, Depends, File, UploadFile
@@ -71,7 +72,7 @@ def undo(request: RevisionRequest):
 def confirm(request: ConfirmRequest): return dataset_repository.confirm(request.dataset_id, request.revision)
 
 
-ADVISOR_PROMPT = """你是QC数据清洗顾问。针对检测出的数据问题给出业务解释与处置建议，不改动原始数值。
+ADVISOR_PROMPT = ROLE_BOUNDARIES["data"] + "\n" + """你是QC数据清洗顾问。针对检测出的数据问题给出业务解释与处置建议，不改动原始数值。
 只输出合法 JSON：{"overall":"总体判断一句话","items":[{"index":0,"action":"keep|drop_rows|median|forward_fill|convert_number|convert_percent","reason":"理由"}]}。index 必须与输入的问题编号一致；没有把握的用 keep。不要 Markdown。"""
 
 

@@ -11,6 +11,16 @@ from backend.app.core.errors import AppException
 from backend.app.models.contracts import ModelUsage, UsageView
 from backend.app.repositories.database import connect, transaction
 
+MAX_OUTPUT_TOKENS = 1_000_000
+
+
+def validate_max_output_tokens(value: int | None) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= MAX_OUTPUT_TOKENS:
+        raise AppException("INVALID_MAX_OUTPUT_TOKENS", "max_output_tokens 必须是 1 至 1000000 的整数", 400)
+    return value
+
 
 def _prices() -> list[dict]:
     return json.loads((PROJECT_ROOT / "backend" / "data" / "model_prices.json").read_text(encoding="utf-8"))
@@ -35,14 +45,16 @@ def estimate_tokens(text: str, model: str) -> int:
         return max(1, math.ceil(cjk * 1.0 + other / 4))
 
 
-def reserve(request_id: str, provider: str, model: str, input_text: str) -> str | None:
+def reserve(request_id: str, provider: str, model: str, input_text: str, max_output_tokens: int | None = None) -> str | None:
+    max_output_tokens = validate_max_output_tokens(max_output_tokens)
     if provider == "local": return None
     settings = get_settings(); input_tokens = estimate_tokens(input_text, model)
+    output_limit = max_output_tokens if max_output_tokens is not None else int(settings.LLM_MAX_OUTPUT_TOKENS)
     try: price = price_for(provider, model)
     except AppException as exc:
         if exc.code != "MODEL_PRICE_UNKNOWN": raise
         price = None
-    amount = Decimal(str(getattr(settings, "UNKNOWN_MODEL_RESERVE_USD", 0.25))) if price is None else Decimal(input_tokens) * Decimal(price["input_per_1m"]) / Decimal(1_000_000) + Decimal(settings.LLM_MAX_OUTPUT_TOKENS) * Decimal(price["output_per_1m"]) / Decimal(1_000_000) + Decimal(price["safety_margin_usd"])
+    amount = Decimal(str(getattr(settings, "UNKNOWN_MODEL_RESERVE_USD", 0.25))) if price is None else Decimal(input_tokens) * Decimal(price["input_per_1m"]) / Decimal(1_000_000) + Decimal(output_limit) * Decimal(price["output_per_1m"]) / Decimal(1_000_000) + Decimal(price["safety_margin_usd"])
     reservation_id = f"res_{uuid4().hex}"
     with transaction(immediate=True) as db:
         used = Decimal(str(db.execute("SELECT COALESCE(SUM(CAST(cost_usd AS REAL)),0) FROM usage_events").fetchone()[0])); held = Decimal(str(db.execute("SELECT COALESCE(SUM(CAST(reserved_usd AS REAL)),0) FROM reservations WHERE status IN ('reserved','usage_unknown')").fetchone()[0]))

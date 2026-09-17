@@ -6,3 +6,4 @@ export const listDocuments = async (projectId: string) => (await api.get<{
     documents: RagIngestResult[];
 }>('/rag/documents', { params: { project_id: projectId } })).data.documents;
 export const deleteDocument = async (documentId: string, projectId: string) => { await api.delete(`/rag/documents/${encodeURIComponent(documentId)}`, { params: { project_id: projectId } }); };
+export const topicHistory = async (projectId: string) => (await api.get<{history: {message:string;response:string;references_used:number}[]}>('/topic/history', {params:{project_id:projectId}})).data.history;

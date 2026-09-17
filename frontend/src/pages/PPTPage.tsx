@@ -1,3 +1,6 @@
+import { Collapse } from 'antd';
+import { useNavigate } from 'react-router';
+import { ChapterReporting } from '../components/reporting/ChapterReporting';
 import { CheckCircleOutlined, DownloadOutlined, FilePptOutlined, RocketOutlined } from '@ant-design/icons';
 import { Alert, Button, Card, Input, List, Tag, message } from 'antd';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -12,7 +15,8 @@ const blobBase64 = (blob: Blob) => new Promise<string>((resolve, reject) => {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(blob);
 });
-export function PPTPage() {
+export function PPTPage() { const navigate=useNavigate(); return <main className="step-page"><header className="page-heading"><div><span className="eyebrow">03 · DELIVER</span><h1>成果检查与导出</h1><p>汇总各章，检查缺项与版本变化，再导出成果。章节中的表格与图表会一同导出。</p></div><Button onClick={()=>navigate('/authoring')}>返回逐章编写</Button></header><ChapterReporting kind="export"/><Collapse items={[{key:'legacy',label:'旧流程成果（仅兼容历史研讨，不代表完整QC章节）',children:<LegacyPPTPage/>}]}/></main> }
+function LegacyPPTPage() {
     const { state, setPpt } = useWizard();
     const [name, setName] = useState((state.topic ?? 'QC成果').slice(0, 80));
     const [dataSummary, setDataSummary] = useState('');

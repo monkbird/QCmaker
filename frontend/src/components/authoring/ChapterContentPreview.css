@@ -1,0 +1,8 @@
+.chapter-content-preview { display: grid; gap: 16px; margin: 16px 0; }
+.chapter-content-preview section { border: 1px solid #dbe5f0; border-radius: 8px; padding: 12px; background: #fbfdff; }
+.chapter-content-preview h4 { margin: 0 0 10px; color: #153455; }
+.chapter-content-preview h4 small { color: #6c8199; font-weight: 400; }
+.chapter-preview-table { overflow-x: auto; }
+.chapter-preview-table table { width: 100%; border-collapse: collapse; color: #26415f; }
+.chapter-preview-table th, .chapter-preview-table td { border: 1px solid #dbe5f0; padding: 7px 9px; text-align: left; white-space: nowrap; }
+.chapter-preview-table th { background: #edf5ff; font-weight: 600; }

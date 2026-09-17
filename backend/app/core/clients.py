@@ -6,6 +6,7 @@ from typing import Any
 
 from backend.app.core.config import get_settings
 from backend.app.core.errors import AppException
+from backend.app.services.usage import validate_max_output_tokens
 
 _lock = threading.RLock()
 _cache: dict[tuple[Any, ...], Any] = {}
@@ -31,9 +32,12 @@ def _cache_get_or_create(key: tuple[Any, ...], factory):
         return _cache[key]
 
 
-def get_chat_client_for(api_key: str | None, base_url: str, model: str, *, allow_private: bool = False):
+def get_chat_client_for(api_key: str | None, base_url: str, model: str, *, allow_private: bool = False, max_output_tokens: int | None = None):
     settings = get_settings()
-    key = (settings.CONFIG_REVISION, "chat", base_url, model, _fingerprint(api_key), allow_private, settings.LLM_MAX_OUTPUT_TOKENS)
+    output_limit = validate_max_output_tokens(max_output_tokens)
+    if output_limit is None:
+        output_limit = int(settings.LLM_MAX_OUTPUT_TOKENS)
+    key = (settings.CONFIG_REVISION, "chat", base_url, model, _fingerprint(api_key), allow_private, output_limit)
 
     def factory():
         from langchain_openai import ChatOpenAI
@@ -42,7 +46,7 @@ def get_chat_client_for(api_key: str | None, base_url: str, model: str, *, allow
         validate_outbound_base_url(base_url, allow_private=allow_private)
         sync_client, async_client = outbound_http_clients(allow_private)
         return ChatOpenAI(api_key=api_key or "ollama", base_url=base_url, model=model,
-                          max_tokens=settings.LLM_MAX_OUTPUT_TOKENS, max_retries=0,
+                          max_tokens=output_limit, max_retries=0,
                           http_client=sync_client, http_async_client=async_client)
     return _cache_get_or_create(key, factory)
 
@@ -60,7 +64,7 @@ def get_embeddings_client():
         api_key, base_url, model = "ollama", settings.LOCAL_LLM_URL, (settings.EMBEDDING_MODEL or settings.LOCAL_LLM_MODEL)
         key = (settings.CONFIG_REVISION, "local-embeddings", base_url, model)
     else:
-        if not settings.OPENAI_API_KEY: raise AppException("LLM_NOT_CONFIGURED", "请先配置 OpenAI API Key", 400)
+        if not settings.OPENAI_API_KEY: raise AppException("EMBEDDING_NOT_CONFIGURED", "尚未配置向量模型凭据", 400)
         api_key = settings.OPENAI_API_KEY
         base_url, model = settings.OPENAI_BASE_URL, settings.EMBEDDING_MODEL
         key = (settings.CONFIG_REVISION, "embeddings", base_url, model, _fingerprint(api_key))

@@ -182,7 +182,8 @@ def test_topic_chat_injects_references(client, monkeypatch):
     result = client.post("/api/topic/chat", json={"message": "泵站经常故障怎么选题"}).json()
     assert result["response"].startswith("建议") and result["references_used"] == 1
     system = captured["messages"][0]["content"]
-    assert "参考资料" in system and "泵站故障率下降30%" in system
+    assert "参考资料" in system and "泵站故障率下降30%" in captured['messages'][-1]['content']
+    assert "泵站故障率下降30%" not in system
 
 
 def test_topic_chat_survives_rag_failure(client, monkeypatch):

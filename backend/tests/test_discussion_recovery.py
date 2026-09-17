@@ -20,7 +20,7 @@ def _fake_chat_factory(fail_once_roles: set[str], routed: list[str]):
         if "JSON数组" in messages[-1]["content"]:
             return json.dumps(routed)
         for agent_role, prompt in ROLE_PROMPTS.items():
-            if system.startswith(prompt[:6]):
+            if role == agent_role:
                 if agent_role in fail_once_roles and agent_role not in failed:
                     failed.add(agent_role); raise RuntimeError("simulated transient llm outage")
                 return f"{agent_role}的发言"
